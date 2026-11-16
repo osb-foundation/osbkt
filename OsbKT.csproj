@@ -21,7 +21,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Osb.Kernel\MiniCoreLib.cs" />
+    <Compile Include="MiniCoreLib.cs" />
+    <Compile Include="Syscall.cs" />
     <Reference Include="System.Runtime.InteropServices" />
   </ItemGroup>
 
