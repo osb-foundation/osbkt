@@ -1,10 +1,10 @@
 # OSB Ring-3 ABI (v0)
 
-Version: **3** (GETABI, AH=82h). This document records the syscall ABI
+Version: **4** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
-`Cpu/SyscallGfx.cs`), so userspace programs (osb.shell, XWIN) can be written
-against a written contract. Planned additions live in
-`osb.shell/docs/MIGRATION.md` §3 and will bump this version.
+`Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs`), so userspace programs
+(osb.shell, XWIN) can be written against a written contract. Planned additions
+live in `osb.shell/docs/MIGRATION.md` §3 and will bump this version.
 
 Version 2 (phase 1b) adds GETCHAR (6Eh) and replaces the provisional 1a.1
 SPAWNPATH (6Ah) with the final `SpawnReq` form. Version 1's 6Ah (RDI=path,
@@ -24,6 +24,17 @@ program that checks `GETABI < 3` refuses to run against a v3 kernel. No syscall
 number, register mapping, or error code changed — only the string encoding of
 the path/args buffers of 6Ah and 20h. (osb.xwin was audited: it uses only
 01h/40h–59h and never calls 20h/21h/6Ah or GETABI, so it is unaffected.)
+
+### v3 -> v4 (phase 1c): session identity (65h–69h)
+
+Version 4 adds the kernel-owned session identity syscalls **65h LOGIN**,
+**66h LOGOUT**, **67h SUDO**, **68h END_SUDO**, **69h WHOAMI**. All strings are
+**byte strings with explicit lengths** (validated with `UserPtr`). Every
+authentication/authorization failure returns **-3 EACCES**; an unknown user and
+a wrong password return the **same** code (no oracle). The kernel owns the
+session (uid/gid/user) and the PASSWD/SUDOERS table; password data is **never**
+returned through any syscall. POWEROFF (58h) and REBOOT (59h) are now
+**root-only** (-3 otherwise). No other syscall changed.
 
 ## Calling convention
 
@@ -130,8 +141,13 @@ ext4 image at build time (kernel `build.sh`).
 | 80h | SPAWN | AL = built-in program id | child pid, -1 fail | ids: kernel-side built-ins only (HELLO/BAD/SPAWNER); not file spawn |
 | 6Ah | SPAWNPATH | RDI = `SpawnReq*` (see below) | child pid, or -1/-3/-4/-5/-6 | spawns the file named in `SpawnReq`. `stdinHandle`/`stdoutHandle` = -1 inherit the console, else an already-open handle the kernel validates **against the caller** (A5). Args capped at 128 bytes. The kernel resolves the path, checks it is a regular file and that the caller may execute it, **before** creating any task (a refusal leaves no child). Error codes (B4): any bad pointer (block/path/args) → **-1 EFAULT**; bad content (pathLen 0 or >260, argsLen >128, a handle ≠ -1) → **-5 EINVAL**; **-3** EACCES; **-4** ENOENT; **-6** ENOMEM. |
 | 81h | WAIT | RSI = pid | child exit status | blocks the caller |
-| 82h | GETABI | — | ABI version (= 3) | osbkt `Syscall.GetABI()`; check at startup |
-| 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is delivered **once per Ctrl+C press** (its own return space; NOT ENOSYS). Buffered bytes are drained before the `-2`, so a line typed before Ctrl+C is consumed (then discarded by the aborting reader). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring and pending Ctrl+C are **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
+| 82h | GETABI | — | ABI version (= 4) | osbkt `Syscall.GetABI()`; check at startup |
+| 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is a Ctrl+C marker delivered **in arrival order** (P0.2: the ring holds byte/`-2` entries, so a line typed after Ctrl+C is a new line, not merged with the aborted one). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring is **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
+| 65h | LOGIN | RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (byte strings) | 0 ok, -1 EFAULT, -3 EACCES | Kernel-owned session (1c). Verifies against PASSWD; unknown user and wrong password are the same **-3**. Only the **session leader** may LOGIN. On success sets session uid/gid/user and cwd to the user's home. Password is never returned by any syscall. |
+| 66h | LOGOUT | — | 0 ok, -3 EACCES | Only the **session leader**. Kills every task in the session except the leader and kernel tasks (session 0), clears the session user. The shell then prints a fresh `login:`. |
+| 67h | SUDO | — | 0 ok, -3 EACCES | Elevates the **calling task's** effective uid to 0 iff the session user is in SUDOERS. Children spawned while elevated inherit uid 0. |
+| 68h | END_SUDO | — | 0 | Restores the calling task's effective uid to the session user's real uid. |
+| 69h | WHOAMI | RDI=buf, RSI=cap | name length, -1 EFAULT, -3 EACCES (not logged in) | Writes the session user's name (bytes). Never password data. |
 
 ### 6Ah `SpawnReq` — the SPAWNPATH argument block (final, v3)
 
@@ -190,17 +206,18 @@ Packed coordinates: one argument carries `(x, y)` or `(w, h)` as
 | 55h | SLEEP | RDI = ticks | 0 (busy-halts the CPU until elapsed) |
 | 56h | TIME | RDI = u8[3] out | 0 (hour, minute, second — RTC) |
 | 57h | MODS | — | bit0 = Ctrl held |
-| 58h | POWEROFF | — | never returns (ACPI S5). v0: **no privilege check** (X8) |
-| 59h | REBOOT | — | never returns (8042 pulse). v0: **no privilege check** (X8) |
+| 58h | POWEROFF | — | never returns (ACPI S5). **root-only** (1c, I3): -3 EACCES for non-root |
+| 59h | REBOOT | — | never returns (8042 pulse). **root-only** (1c, I3): -3 EACCES for non-root |
 
 ## Out of v0 (planned, see osb.shell/docs/MIGRATION.md §3)
 
 File writes (OPEN/READ/WRITE/CLOSE/LSEEK), CHDIR/MKDIR/RMDIR/UNLINK/RENAME/
-LINK, STAT/CHMOD/CHOWN, environment, LOGIN/LOGOUT/SUDO/WHOAMI,
+LINK, STAT/CHMOD/CHOWN, environment,
 TASKLIST/KILL/SETFG, CLEAR/SETCOLOR, DATETIME, network,
-PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–6Dh, 6Fh–7Fh.
+PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–64h, 6Ah–6Dh, 6Fh–7Fh.
 When added, this file gains the entries and GETABI is bumped.
-(6Ah SPAWNPATH and 6Eh GETCHAR are implemented in v3 above; the `SpawnReq`
-block is the final form, not the provisional 1a.1 `RDI=path` form.)
+(6Ah SPAWNPATH, 6Eh GETCHAR and 65h–69h session identity are implemented in v4
+above; the `SpawnReq` block is the final form, not the provisional 1a.1
+`RDI=path` form.)
 
 OSLANG is kernel-internal (A12) and not part of this ABI.

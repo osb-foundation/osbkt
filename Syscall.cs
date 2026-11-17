@@ -19,6 +19,11 @@ namespace OsbKT
         private const int GetAbiNum      = 0x82; // kernel ABI version (osbkt/docs/ABI.md)
         private const int TicksNum       = 0x54; // PIT tick count (SyscallGfx)
         private const int SleepNum       = 0x55; // sleep(ticks) (SyscallGfx)
+        private const int LoginNum       = 0x65; // LOGIN(name,pass) session (1c)
+        private const int LogoutNum      = 0x66; // LOGOUT()
+        private const int SudoNum        = 0x67; // SUDO() elevate caller
+        private const int EndSudoNum     = 0x68; // END_SUDO() restore caller
+        private const int WhoAmINum      = 0x69; // WHOAMI(buf,cap) -> name
 
         // Register-based gate (osbkt/crt0.S): RAX = AH<<8 | AL, then
         // RDI, RSI, RDX, RCX arguments; result in RAX.
@@ -234,13 +239,45 @@ namespace OsbKT
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
-        // v3 (phase 1c): 6Ah/20h carry BYTE strings (B1), not UTF-16 chars.
-        public const ushort AbiVersion = 3;
+        // v4 (phase 1c): session identity (65h-69h); v3 made 6Ah/20h byte
+        // strings (B1).
+        public const ushort AbiVersion = 4;
 
         public static ushort GetABI()
         {
             return (ushort)Invoke(GetAbiNum);
         }
+
+        // ----- session identity (65h-69h, 1c) -----
+        // All strings are BYTE strings with explicit lengths. Every auth/authz
+        // failure is -3 (EACCES); unknown user and wrong password are the same.
+
+        public static int Login(string name, string password)
+        {
+            var nbuf = stackalloc byte[32];
+            int nlen = Narrow(name, nbuf, 32);
+            if (nlen < 0) return -1;
+            var pbuf = stackalloc byte[32];
+            int plen = Narrow(password, pbuf, 32);
+            if (plen < 0) return -1;
+            return Login(nbuf, nlen, pbuf, plen);
+        }
+
+        // Byte-string overload (zero-allocation; the shell uses this).
+        public static int Login(byte* name, int nameLen, byte* pass, int passLen)
+        {
+            return (int)Invoke(LoginNum, arg1: (ulong)name, arg2: (ulong)nameLen,
+                arg3: (ulong)pass, arg4: (ulong)passLen);
+        }
+
+        public static int Logout() => (int)Invoke(LogoutNum);
+
+        public static int Sudo() => (int)Invoke(SudoNum);
+
+        public static int EndSudo() => (int)Invoke(EndSudoNum);
+
+        public static int WhoAmI(byte* buf, int cap)
+            => (int)Invoke(WhoAmINum, arg1: (ulong)buf, arg2: (ulong)cap);
 
         // ----- time (SyscallGfx 54h/55h) -----
 
