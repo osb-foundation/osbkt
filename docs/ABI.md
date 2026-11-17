@@ -36,6 +36,12 @@ session (uid/gid/user) and the PASSWD/SUDOERS table; password data is **never**
 returned through any syscall. POWEROFF (58h) and REBOOT (59h) are now
 **root-only** (-3 otherwise). No other syscall changed.
 
+**1c.1 refinement (no number/signature change):** 65h now rejects an empty name
+or a name ≥ `NameCap` with **-3** (it never truncates), and a LOGIN while a
+session is already active first performs the LOGOUT teardown (kills the session's
+tasks except the leader and kernel tasks) before authenticating. 66h LOGOUT and a
+re-LOGIN share the same teardown path.
+
 ## Calling convention
 
 * Gate: `INT 21h`. Function number in **AH**; arguments in the 64-bit
@@ -143,7 +149,7 @@ ext4 image at build time (kernel `build.sh`).
 | 81h | WAIT | RSI = pid | child exit status | blocks the caller |
 | 82h | GETABI | — | ABI version (= 4) | osbkt `Syscall.GetABI()`; check at startup |
 | 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is a Ctrl+C marker delivered **in arrival order** (P0.2: the ring holds byte/`-2` entries, so a line typed after Ctrl+C is a new line, not merged with the aborted one). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring is **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
-| 65h | LOGIN | RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (byte strings) | 0 ok, -1 EFAULT, -3 EACCES | Kernel-owned session (1c). Verifies against PASSWD; unknown user and wrong password are the same **-3**. Only the **session leader** may LOGIN. On success sets session uid/gid/user and cwd to the user's home. Password is never returned by any syscall. |
+| 65h | LOGIN | RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (byte strings) | 0 ok, -1 EFAULT, -3 EACCES | Kernel-owned session (1c). Verifies against PASSWD; unknown user and wrong password are the same **-3**. Only the **session leader** may LOGIN. An empty name or a name ≥ NameCap is rejected **-3** (never truncated). A LOGIN while a session is active first tears that session down (LOGOUT), then authenticates. On success sets session uid/gid/user and cwd to the user's home. Password is never returned by any syscall. |
 | 66h | LOGOUT | — | 0 ok, -3 EACCES | Only the **session leader**. Kills every task in the session except the leader and kernel tasks (session 0), clears the session user. The shell then prints a fresh `login:`. |
 | 67h | SUDO | — | 0 ok, -3 EACCES | Elevates the **calling task's** effective uid to 0 iff the session user is in SUDOERS. Children spawned while elevated inherit uid 0. |
 | 68h | END_SUDO | — | 0 | Restores the calling task's effective uid to the session user's real uid. |
