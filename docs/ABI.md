@@ -10,19 +10,16 @@ against a written contract. Planned additions live in
 
 * Gate: `INT 21h`. Function number in **AH**; arguments in the 64-bit
   registers; the result is returned in **RAX** (negative = error, see below).
-* Register mapping as delivered by osbkt's `HandleSyscall` frame:
-
-| Register | Frame slot (u64 index) | Role |
-|---|---|---|
-| RAX | 14 | function (AH) in, result out |
-| RDI | 9  | arg1 |
-| RSI | 10 | arg2 |
-| RDX | 11 | arg3 |
-| RCX | 12 | arg4 |
-| RBX | 15 | (unused by syscalls) |
-| RBP | 13 | (unused by syscalls) |
-
-* `INT 21h` is issued from ring 3 (IOPL check in the kernel's IDT gate).
+* Argument registers: **RDI** (arg1), **RSI** (arg2), **RDX** (arg3),
+  **RCX** (arg4). AL-argument syscalls carry their argument in **AL**
+  (AH = function, AL = value): `4Ch` exit code, `80h` built-in program id.
+  All other syscalls pass AL = 0.
+* The syscall gate is a **DPL3** IDT gate (ring 3 may `INT 21h`; ring 0
+  only). (Supersedes an earlier draft that mislabeled this an "IOPL check".)
+* osbkt issues syscalls through the register-based `osb_syscall` stub
+  (`osbkt/crt0.S`): `osb_syscall(rax, rdi, rsi, rdx, rcx)`. The kernel's
+  internal saved-frame layout is an implementation detail and **not part of
+  this ABI**.
 * **Error returns:** `-1` = EFAULT (argument pointer outside the user window
   or otherwise rejected), `-2` = ENOSYS (unknown function number). These two
   meanings are frozen (A7) and must not be redefined by later ABI versions.
@@ -30,13 +27,14 @@ against a written contract. Planned additions live in
   `ptr >= UserBase && ptr + len <= UserLimit`. v0 checks only the start
   address for most calls (kernel debt X9); new syscalls must implement the
   full check, and v0 callers must not rely on out-of-range len being safe.
-* User window: `UserBase = 0x2000000`, `UserLimit` = top of the user block
+* User window: `UserBase = 0x2000000`, `UserLimit = 0x2200000`
   (kernel `Memory/Layout.cs`).
 
 ## crt0 and the entry symbol
 
-`osbkt/crt0.S` provides `_start`, the `HandleSyscall` shim, `memcpy`/`memset`/
-`memmove`, and `__security_cookie` for every ring-3 program. The NativeAOT
+`osbkt/crt0.S` provides `_start`, the register-based `osb_syscall` shim
+(`rax, rdi, rsi, rdx, rcx` → `INT 21h`), `memcpy`/`memset`/`memmove`, and
+`__security_cookie` for every ring-3 program. The NativeAOT
 startup symbol is named after the consuming module, so the link step defines
 the generic `osb_startup` per consumer:
 
@@ -54,8 +52,8 @@ u32 entry, u32 size — matching `Scheduler.SpawnFile`).
 
 | AH | Name | Args | Returns | Notes |
 |---|---|---|---|---|
-| 01h | WRITE | RDI=buf, RSI=len | RAX = bytes written (max 4096), -1 EFAULT | bytes to VGA console; serial mirrors automatically |
-| 09h | PRINT | RSI = `$`-terminated string | 0, -1 EFAULT | scans up to 4096 bytes for `$` |
+| 01h | WRITE | RDI=buf, RSI=len | RAX = bytes written (max 4096), -1 EFAULT | bytes to VGA console; serial mirrors automatically. **osbkt uses 01h for all text output (F2): `PrintString`/`PutChar`/`Print` no longer use 09h, so `$` no longer terminates text and long strings work** |
+| 09h | PRINT | RSI = `$`-terminated string | 0, -1 EFAULT | scans up to 4096 bytes for `$`; kept for XWIN compatibility, unused by osbkt |
 
 ## Memory
 
