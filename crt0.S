@@ -1,5 +1,5 @@
 /* Ring-3 startup, syscall gate, and runtime helpers shared by every OSB
- * userspace program (shell, XWIN, ...).
+ * userspace program (shell, XWIN, test programs).
  *
  * The AOT startup symbol is named after the consuming module
  * (<module>__Module___StartupCodeMain), so this file calls the generic
@@ -7,7 +7,9 @@
  *
  *   ld.lld ... --defsym=osb_startup=OsbShell__Module___StartupCodeMain
  *
- * See osbkt/docs/ABI.md ("crt0 and the entry symbol"). */
+ * Syscalls go through osb_syscall: register-based (SysV args), RAX carries
+ * the function in AH and the AL-argument for the syscalls that take one
+ * (4Ch exit code, 80h program id). See osbkt/docs/ABI.md. */
 
 .section .text
 
@@ -19,18 +21,20 @@ _start:
 1:  hlt
     jmp 1b
 
-/* HandleSyscall(frame): load the DOS-style register image, INT 21h, store result. */
-.global HandleSyscall
-.type HandleSyscall, @function
-HandleSyscall:
-    movq %rdi, %r8
-    movq 112(%r8), %rax
-    movq 96(%r8), %rcx
-    movq 88(%r8), %rdx
-    movq 80(%r8), %rsi
-    movq 72(%r8), %rdi
-    int $0x21
-    movq %rax, 112(%r8)
+/* osb_syscall(rax, rdi, rsi, rdx, rcx): SysV argument registers are
+ * rdi, rsi, rdx, rcx, r8. We shuffle them into the INT 21h register image
+ * and return RAX (the kernel writes the result into the frame's RAX slot
+ * before iretq, so it arrives here directly). Only caller-saved registers
+ * are touched (rax, rcx, rdx, rsi, rdi, r8-r11). */
+.global osb_syscall
+.type osb_syscall, @function
+osb_syscall:
+    movq %rdi, %rax
+    movq %rsi, %rdi
+    movq %rdx, %rsi
+    movq %rcx, %rdx
+    movq %r8,  %rcx
+    int  $0x21
     ret
 
 /* runtime helpers the AOT code may call */

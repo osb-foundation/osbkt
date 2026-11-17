@@ -6,82 +6,42 @@ namespace OsbKT
     public static unsafe class Syscall
     {
         // Syscall numbers (AH)
-        private const int PrintStringNum = 0x09;
+        private const int WriteNum       = 0x01; // write(buf in RDI, len in RSI)
+        private const int PrintStringNum = 0x09; // legacy '$'-terminated print (not used by osbkt)
         private const int GetKeyScancodeNum = 0x52; // From SyscallGfx.KEY
         private const int GetPidNum      = 0x30;
-        private const int ExitNum        = 0x4C;
-        private const int SpawnNum       = 0x80;
-        private const int WaitNum        = 0x81;
+        private const int ExitNum        = 0x4C; // AL = exit code
+        private const int SpawnNum       = 0x80; // AL = built-in program id
+        private const int WaitNum        = 0x81; // RSI = pid
         private const int MemInfoNum     = 0x10;
         private const int GetAbiNum      = 0x82; // kernel ABI version (osbkt/docs/ABI.md)
         private const int TicksNum       = 0x54; // PIT tick count (SyscallGfx)
         private const int SleepNum       = 0x55; // sleep(ticks) (SyscallGfx)
-        // Write buffer (AH=01h) – used for PutChar
-        private const int WriteBufNum    = 0x01;
 
-        // Frame layout matching kernel's Syscalls.Handle(ulong* frame)
-        // Indices used:
-        //   RAX = frame[14]
-        //   RBX = frame[15]
-        //   RCX = frame[12]
-        //   RDX = frame[11]
-        //   RSI = frame[10]
-        //   RDI = frame[9]
-        //   RBP = frame[13]
-        // Others not used.
-
+        // Register-based gate (osbkt/crt0.S): RAX = AH<<8 | AL, then
+        // RDI, RSI, RDX, RCX arguments; result in RAX.
         [System.Runtime.InteropServices.DllImport("osbnative")]
-        private static extern ulong HandleSyscall(ulong* frame);
+        private static extern ulong osb_syscall(ulong rax, ulong arg1, ulong arg2, ulong arg3, ulong arg4);
 
-        private static ulong Invoke(int ah,
-                                    ulong arg0 = 0, // RSI
+        private static ulong Invoke(int ah, ulong al = 0,
                                     ulong arg1 = 0, // RDI
-                                    ulong arg2 = 0, // RDX
-                                    ulong arg3 = 0) // RCX
+                                    ulong arg2 = 0, // RSI
+                                    ulong arg3 = 0, // RDX
+                                    ulong arg4 = 0) // RCX
         {
-            var frame = stackalloc ulong[16];
-            frame[14] = ((ulong)ah << 8); // RAX: AH set, AL zero for now
-            frame[10] = arg0; // RSI
-            frame[9]  = arg1; // RDI
-            frame[11] = arg2; // RDX
-            frame[12] = arg3; // RCX
-            return HandleSyscall(frame);
-        }
-
-        // Helper to write a '$'-terminated string (as expected by the kernel's AH=09h)
-        private static void WriteStringAsBytes(string s, byte* dst)
-        {
-            fixed (char* p = s)
-            {
-                int i = 0;
-                while (i < s.Length && i < 255) // limit length to stack buffer
-                {
-                    char c = p[i];
-                    dst[i] = (byte)c;
-                    i++;
-                }
-                dst[i] = (byte)'$'; // terminator
-            }
+            return osb_syscall(((ulong)ah << 8) | al, arg1, arg2, arg3, arg4);
         }
 
         // ---------- Filesystem helpers (existing syscalls) ----------
 
         public static int GetCwd(byte* buf, int cap)
         {
-            var frame = stackalloc ulong[16];
-            frame[14] = ((ulong)0x22 << 8);
-            frame[9]  = (ulong)buf;   // RDI
-            frame[10] = (ulong)cap;   // RSI
-            return (int)HandleSyscall(frame);
+            return (int)Invoke(0x22, arg1: (ulong)buf, arg2: (ulong)cap);
         }
 
         public static int GetArgs(byte* buf, int cap)
         {
-            var frame = stackalloc ulong[16];
-            frame[14] = ((ulong)0x23 << 8);
-            frame[9]  = (ulong)buf;   // RDI
-            frame[10] = (ulong)cap;   // RSI
-            return (int)HandleSyscall(frame);
+            return (int)Invoke(0x23, arg1: (ulong)buf, arg2: (ulong)cap);
         }
 
         public static bool ResolvePath(string path, out uint ino, out ushort mode, out ushort uid, out ulong size)
@@ -91,12 +51,8 @@ namespace OsbKT
             fixed (char* p = path)
             {
                 byte* outBuf = stackalloc byte[16];
-                var frame = stackalloc ulong[16];
-                frame[14] = ((ulong)0x20 << 8);
-                frame[9]  = (ulong)p;              // RDI = path
-                frame[10] = (ulong)path.Length;    // RSI = len
-                frame[11] = (ulong)outBuf;         // RDX = out
-                if (HandleSyscall(frame) != 1) return false;
+                if (Invoke(0x20, arg1: (ulong)p, arg2: (ulong)path.Length, arg3: (ulong)outBuf) != 1)
+                    return false;
                 ino = (uint)(outBuf[0] | (outBuf[1] << 8) | (outBuf[2] << 16) | (outBuf[3] << 24));
                 mode = (ushort)(outBuf[4] | (outBuf[5] << 8));
                 uid = (ushort)(outBuf[6] | (outBuf[7] << 8));
@@ -108,30 +64,32 @@ namespace OsbKT
 
         public static bool DirNext(uint dirIno, int index, byte* outBuf, int cap)
         {
-            var frame = stackalloc ulong[16];
-            frame[14] = ((ulong)0x21 << 8);
-            frame[9]  = dirIno;          // RDI
-            frame[10] = (ulong)index;    // RSI
-            frame[11] = (ulong)outBuf;   // RDX
-            frame[12] = (ulong)cap;      // RCX
-            return HandleSyscall(frame) == 1;
+            return Invoke(0x21, arg1: dirIno, arg2: (ulong)index, arg3: (ulong)outBuf, arg4: (ulong)cap) == 1;
         }
 
         // ---------- PUBLIC API ----------
 
+        // Text output via AH=09h PRINT ('$'-terminated).
+        private static void WriteStringAsBytes(string s, byte* dst)
+        {
+            fixed (char* p = s)
+            {
+                int i = 0;
+                while (i < s.Length && i < 255) { dst[i] = (byte)p[i]; i++; }
+                dst[i] = (byte)'$';
+            }
+        }
+
         public static void PrintString(string s)
         {
-            // Allocate buffer on stack (max 256 chars + terminator)
             var buf = stackalloc byte[256];
             WriteStringAsBytes(s, buf);
-            // buf is already a byte* – no fixed needed
-            Invoke(PrintStringNum, (ulong)buf);
+            Invoke(PrintStringNum, arg2: (ulong)buf);
         }
 
         public static int GetKeyScancode()
         {
-            var ret = Invoke(GetKeyScancodeNum);
-            return (int)ret;
+            return (int)Invoke(GetKeyScancodeNum);
         }
 
         public static uint GetPid()
@@ -141,31 +99,27 @@ namespace OsbKT
 
         public static void Exit(int exitCode)
         {
-            // AH = 4Ch, AL = exitCode
-            Invoke(ExitNum, (ulong)exitCode);
+            // AH = 4Ch, AL = exitCode (F1: was passing the code in RSI)
+            Invoke(ExitNum, al: (ulong)(byte)exitCode);
             // Should not return.
         }
 
         public static int Spawn(byte programId)
         {
-            var ret = Invoke(SpawnNum, programId);
-            return (int)ret;
+            // AH = 80h, AL = program id (F1: was passing the id in RSI)
+            return (int)Invoke(SpawnNum, al: programId);
         }
 
         public static int Wait(int pid)
         {
-            var ret = Invoke(WaitNum, (ulong)pid);
-            return (int)ret;
+            return (int)Invoke(WaitNum, arg2: (ulong)pid);
         }
 
         public static void MemInfo(out ulong totalKB, out ulong usedKB, out ulong freeKB)
         {
             // Kernel expects RDI pointing to buffer of 3 ulong (total, used, free)
             var buffer = stackalloc ulong[3];
-            var frame = stackalloc ulong[16];
-            frame[14] = ((ulong)MemInfoNum << 8);
-            frame[9]  = (ulong)buffer; // RDI
-            HandleSyscall(frame);
+            Invoke(MemInfoNum, arg1: (ulong)buffer);
             totalKB = buffer[0];
             usedKB  = buffer[1];
             freeKB  = buffer[2];
@@ -190,22 +144,15 @@ namespace OsbKT
 
         public static void Sleep(ulong ticks)
         {
-            var frame = stackalloc ulong[16];
-            frame[14] = ((ulong)SleepNum << 8);
-            frame[9]  = ticks; // RDI
-            HandleSyscall(frame);
+            Invoke(SleepNum, arg1: ticks);
         }
 
-        // ----- PutChar via write-buffer syscall (AH=01h) -----
+        // ----- single char -----
+
         public static void PutChar(char c)
         {
-            var buf = stackalloc byte[1];
-            buf[0] = (byte)c;
-            var frame = stackalloc ulong[16];
-            frame[14] = ((ulong)WriteBufNum << 8); // AH=01h (write buffer)
-            frame[9]  = (ulong)buf;   // RDI = pointer to buffer
-            frame[10] = 1UL;          // RSI = length = 1
-            HandleSyscall(frame);
+            char b = c;
+            Invoke(WriteNum, arg1: (ulong)(&b), arg2: 1UL);
         }
     }
 }
