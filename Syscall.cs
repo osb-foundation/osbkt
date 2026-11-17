@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace OsbKT
 {
-    internal static unsafe class Syscall
+    public static unsafe class Syscall
     {
         // Syscall numbers (AH)
         private const int PrintStringNum = 0x09;
@@ -13,6 +13,9 @@ namespace OsbKT
         private const int SpawnNum       = 0x80;
         private const int WaitNum        = 0x81;
         private const int MemInfoNum     = 0x10;
+        private const int GetAbiNum      = 0x82; // kernel ABI version (osbkt/docs/ABI.md)
+        private const int TicksNum       = 0x54; // PIT tick count (SyscallGfx)
+        private const int SleepNum       = 0x55; // sleep(ticks) (SyscallGfx)
         // Write buffer (AH=01h) – used for PutChar
         private const int WriteBufNum    = 0x01;
 
@@ -166,6 +169,31 @@ namespace OsbKT
             totalKB = buffer[0];
             usedKB  = buffer[1];
             freeKB  = buffer[2];
+        }
+
+        // ----- ABI version check (AH=82h) -----
+        // The ABI version this osbkt is written against (docs/ABI.md). Call
+        // GetABI() once at startup and refuse to run on a mismatch.
+        public const ushort AbiVersion = 1;
+
+        public static ushort GetABI()
+        {
+            return (ushort)Invoke(GetAbiNum);
+        }
+
+        // ----- time (SyscallGfx 54h/55h) -----
+
+        public static ulong Ticks()
+        {
+            return Invoke(TicksNum);
+        }
+
+        public static void Sleep(ulong ticks)
+        {
+            var frame = stackalloc ulong[16];
+            frame[14] = ((ulong)SleepNum << 8);
+            frame[9]  = ticks; // RDI
+            HandleSyscall(frame);
         }
 
         // ----- PutChar via write-buffer syscall (AH=01h) -----

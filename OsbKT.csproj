@@ -21,10 +21,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="MiniCoreLib.cs" />
+    <!-- Single MiniCoreLib source: link the canonical copy from osb.core
+         (sibling checkout, see README.md "Sibling checkouts"). -->
+    <Compile Include="../osb.core/src/MiniCoreLib.cs" Link="MiniCoreLib.cs" />
     <Compile Include="Syscall.cs" />
     <Reference Include="System.Runtime.InteropServices" />
   </ItemGroup>
+
+  <!-- Fail with a clear message when a sibling repo is missing (A10). -->
+  <Target Name="CheckSiblings" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)../osb.core/src/MiniCoreLib.cs')"
+           Text="osb.core sibling repo not found (expected ../osb.core/src/MiniCoreLib.cs). Clone the OSB repos side by side; see README.md." />
+  </Target>
 
   <!-- Same as kernel: strip out unnecessary .NET references -->
   <Target Name="CustomizeReferences" BeforeTargets="BeforeCompile" AfterTargets="FindReferenceAssembliesForReferences">

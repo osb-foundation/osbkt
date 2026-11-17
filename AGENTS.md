@@ -24,11 +24,24 @@ This file guides coding agents working in the `osbkt` repository.
 
 The library provides wrappers for:
 
-- **Console I/O**: `PrintString`, `PutChar`, `GetChar`
-- **Process Management**: `Exit`, `Spawn`, `Wait`, `GetPid`
+- **Console I/O**: `PrintString`, `PutChar`, `GetKeyScancode`
+- **Process Management**: `Exit`, `Spawn`, `Wait`, `GetPid`, `GetABI`
 - **Memory**: `MemInfo`
-- **Filesystem**: `CreateFile`, `OpenFile`, `ReadFile`, `WriteFile`, `DeleteFile`, `CreateDir`, `RemoveDir`, `Rename`, `ResolvePath`, `DirNext`
+- **Filesystem**: `ResolvePath`, `DirNext` (read-only surface)
 - **Environment**: `GetCwd`, `GetArgs`
+
+Plus ring-3 infrastructure: `crt0.S` (startup + INT 21h shim + mem
+helpers), `user.ld` (link at 0x2000000), `mkosbx.py` (OSBX packaging).
+The full ABI contract is `docs/ABI.md`; it is the source of truth — update
+it in the same commit as any syscall change.
+
+## Sibling checkouts
+
+Consumers (osb.shell, osb.xwin, osb.kernel) are expected side by side with
+this repo; they consume osbkt by **linked sources** (`Syscall.cs`) plus the
+canonical MiniCoreLib from `osb.core/src/MiniCoreLib.cs`. There is no
+osbkt.dll at runtime; each consumer is a single freestanding NativeAOT
+module.
 
 ## Build and Validation
 
@@ -51,4 +64,5 @@ dotnet build
 
 ## Documentation Anchors
 
+- `docs/ABI.md`: the syscall ABI contract (source of truth).
 - `README.md`: High-level project/user documentation.
