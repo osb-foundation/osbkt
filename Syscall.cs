@@ -53,22 +53,37 @@ namespace OsbKT
             return (int)Invoke(0x23, arg1: (ulong)buf, arg2: (ulong)cap);
         }
 
+        // Narrow a managed string to a byte buffer (B1: all ring-3 string
+        // arguments are byte strings — ASCII/UTF-8 — like GETCWD/GETARGS/WRITE).
+        // Returns the byte length, or -1 if it does not fit in `cap`. A null
+        // string yields 0 (the kernel then sees an empty path/args).
+        private static int Narrow(string s, byte* dst, int cap)
+        {
+            if (s == null) return 0;
+            if (s.Length > cap) return -1;
+            fixed (char* p = s)
+            {
+                for (int i = 0; i < s.Length; i++) dst[i] = (byte)p[i];
+            }
+            return s.Length;
+        }
+
         public static bool ResolvePath(string path, out uint ino, out ushort mode, out ushort uid, out ulong size)
         {
             ino = 0; mode = 0; uid = 0; size = 0;
             if (path == null) return false;
-            fixed (char* p = path)
-            {
-                byte* outBuf = stackalloc byte[16];
-                if (Invoke(0x20, arg1: (ulong)p, arg2: (ulong)path.Length, arg3: (ulong)outBuf) != 1)
-                    return false;
-                ino = (uint)(outBuf[0] | (outBuf[1] << 8) | (outBuf[2] << 16) | (outBuf[3] << 24));
-                mode = (ushort)(outBuf[4] | (outBuf[5] << 8));
-                uid = (ushort)(outBuf[6] | (outBuf[7] << 8));
-                size = 0;
-                for (int k = 0; k < 8; k++) size |= ((ulong)outBuf[8 + k]) << (k * 8);
-                return true;
-            }
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return false;
+            byte* outBuf = stackalloc byte[16];
+            if (Invoke(0x20, arg1: (ulong)pbuf, arg2: (ulong)plen, arg3: (ulong)outBuf) != 1)
+                return false;
+            ino = (uint)(outBuf[0] | (outBuf[1] << 8) | (outBuf[2] << 16) | (outBuf[3] << 24));
+            mode = (ushort)(outBuf[4] | (outBuf[5] << 8));
+            uid = (ushort)(outBuf[6] | (outBuf[7] << 8));
+            size = 0;
+            for (int k = 0; k < 8; k++) size |= ((ulong)outBuf[8 + k]) << (k * 8);
+            return true;
         }
 
         public static bool DirNext(uint dirIno, int index, byte* outBuf, int cap)
@@ -159,12 +174,38 @@ namespace OsbKT
         }
 
         // Spawn an external program by SpawnReq (AH=6Ah, final v2 form).
-        // Returns the child pid, or a negative error: -3 EACCES, -4 ENOENT,
-        // -5 EINVAL (bad block), -6 ENOMEM. The kernel validates the block and
-        // every pointer it holds (S3). `req` must stay alive for the call.
+        // Returns the child pid, or a negative error (B4): -1 EFAULT (bad
+        // pointer), -3 EACCES, -4 ENOENT, -5 EINVAL (bad content), -6 ENOMEM.
+        // The kernel validates the block and every pointer it holds, resolves
+        // and exec-checks the file before creating a task (S3/B3). `req` must
+        // stay alive for the call. All string fields are BYTE strings (B1).
         public static int SpawnPath(SpawnReq* req)
         {
             return (int)Invoke(SpawnPathNum, arg1: (ulong)req);
+        }
+
+        // Spawn an external program by path + args, narrowing both to bytes
+        // (B1). The `SpawnReq` is filled on the stack (zero GC allocations);
+        // stdin/stdout inherit the console. Returns the child pid, or a
+        // negative error: -1 EFAULT, -3 EACCES, -4 ENOENT, -5 EINVAL, -6 ENOMEM.
+        public static int SpawnPath(string path, string args)
+        {
+            var pbuf = stackalloc byte[260];
+            var abuf = stackalloc byte[128];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return -5;              // EINVAL (path > 260)
+            int alen = Narrow(args, abuf, 128);
+            if (alen < 0) return -5;              // EINVAL (args > 128)
+            var req = new SpawnReq
+            {
+                PathPtr = (ulong)pbuf,
+                PathLen = (uint)plen,
+                ArgsPtr = alen > 0 ? (ulong)abuf : 0,
+                ArgsLen = (uint)alen,
+                StdinHandle = -1,
+                StdoutHandle = -1
+            };
+            return (int)Invoke(SpawnPathNum, arg1: (ulong)(&req));
         }
 
         // GetChar: next cooked console byte (AH=6Eh). Merges serial + PS/2.

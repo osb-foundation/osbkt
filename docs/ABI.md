@@ -10,6 +10,13 @@ Version 2 (phase 1b) adds GETCHAR (6Eh) and replaces the provisional 1a.1
 SPAWNPATH (6Ah) with the final `SpawnReq` form. Version 1's 6Ah (RDI=path,
 RSI=len, RDX=args, RCX=argsLen) was **provisional** and is superseded.
 
+Version 2 is **unchanged** by phase 1b.1: the wire format of 6Ah (`SpawnReq`)
+and 20h (RESOLVE) is identical, so `AbiVersion` stays 2. What changed is the
+**string convention**, now documented below: every ring-3 string argument is a
+**byte string** (B1), 6Ah error codes were tightened (B4), and 20h rejects an
+out-of-range length instead of clamping (B2). Callers that already pass bytes
+(e.g. osbkt's `Print`/`Write`) are unaffected.
+
 ## Calling convention
 
 * Gate: `INT 21h`. Function number in **AH**; arguments in the 64-bit
@@ -28,9 +35,17 @@ RSI=len, RDX=args, RCX=argsLen) was **provisional** and is superseded.
   or otherwise rejected), `-2` = ENOSYS (unknown function number). These two
   meanings are frozen (A7) and must not be redefined by later ABI versions.
   SPAWNPATH (6Ah) uses its own negative codes: `-3` EACCES (not executable by
-  the caller), `-4` ENOENT (no such file), `-5` EINVAL (bad `SpawnReq`),
-  `-6` ENOMEM (no room for the child). GETCHAR (6Eh) has its **own return
-  space** (see its row); its `-2` means Ctrl+C, **not** ENOSYS.
+  the caller), `-4` ENOENT (no such file), `-5` EINVAL (bad `SpawnReq`
+  content), `-6` ENOMEM (no room for the child). GETCHAR (6Eh) has its **own
+  return space** (see its row); its `-2` means Ctrl+C, **not** ENOSYS.
+* **String convention (B1):** every ring-3 **string argument is a BYTE string**
+  (ASCII/UTF-8), with an explicit byte length — the same convention as GETCWD
+  (22h), GETARGS (23h) and WRITE (01h). This applies to 6Ah (`pathPtr`/`argsPtr`
+  and their byte lengths) and 20h RESOLVE (`path`/`len`), and any future
+  path-taking syscall. The kernel converts the bytes to its internal char*
+  (UTF-16) form; callers must **not** pass a UTF-16 `char*` with a character
+  count. osbkt wrappers narrow `char`→`byte` before the call (see `Narrow` in
+  `Syscall.cs`), exactly like `Print`/`Write`.
 * **Pointer rule (A7):** every pointer argument must satisfy
   `ptr >= UserBase && ptr + len <= UserLimit`, with overflow-safe arithmetic
   (a `len` that wraps `ptr + len` past `UserLimit` is rejected). v2 (phase 1b)
@@ -90,10 +105,10 @@ u32 entry, u32 size — matching `Scheduler.SpawnFile`).
 
 | AH | Name | Args | Returns | Notes |
 |---|---|---|---|---|
-| 20h | RESOLVE | RDI=path, RSI=len, RDX = out 16 B | 1 ok, 0 fail | out: u32 ino, u16 mode, u16 uid, u64 size. No permission check (X7) |
+| 20h | RESOLVE | RDI=path (bytes), RSI=len, RDX = out 16 B | 1 ok, 0 fail | out: u32 ino, u16 mode, u16 uid, u64 size. `path` is a **byte** string (B1); `len` is its byte length. `len` must be ≤260 — a larger `len` is rejected with 0 (B2: the validated length is exactly the length used, never clamped). No permission check (X7) |
 | 21h | DIRNEXT | RDI=dirIno, RSI=index, RDX=out, RCX=cap (≤240) | 1 entry, 0 end/fail | out: u32 childIno, u8 type, u8 nameLen, name bytes; `.`/`..` skipped |
 | 22h | GETCWD | RDI=buf, RSI=cap (≤256) | n (NUL-terminated), -1 EFAULT | |
-| 23h | GETARGS | RDI=buf, RSI=cap (≤128) | n | the task's argument string |
+| 23h | GETARGS | RDI=buf, RSI=cap (≤129) | n | the task's argument string. `cap` up to 129 returns up to 128 chars + NUL, so a 128-byte argument round-trips intact. |
 
 There are no write/create/delete syscalls in v0; files are seeded into the
 ext4 image at build time (kernel `build.sh`).
@@ -105,10 +120,10 @@ ext4 image at build time (kernel `build.sh`).
 | 30h | GETPID | — | pid | |
 | 4Ch | EXIT | AL = exit code | never returns | task becomes zombie; reaped by WAIT |
 | 80h | SPAWN | AL = built-in program id | child pid, -1 fail | ids: kernel-side built-ins only (HELLO/BAD/SPAWNER); not file spawn |
-| 6Ah | SPAWNPATH | RDI = `SpawnReq*` (see below) | child pid, or -3/-4/-5/-6 | spawns the file named in `SpawnReq`. `stdinHandle`/`stdoutHandle` = -1 inherit the console, else an already-open handle the kernel validates **against the caller** (A5). Args capped at 128 bytes. |
+| 6Ah | SPAWNPATH | RDI = `SpawnReq*` (see below) | child pid, or -1/-3/-4/-5/-6 | spawns the file named in `SpawnReq`. `stdinHandle`/`stdoutHandle` = -1 inherit the console, else an already-open handle the kernel validates **against the caller** (A5). Args capped at 128 bytes. The kernel resolves the path, checks it is a regular file and that the caller may execute it, **before** creating any task (a refusal leaves no child). Error codes (B4): any bad pointer (block/path/args) → **-1 EFAULT**; bad content (pathLen 0 or >260, argsLen >128, a handle ≠ -1) → **-5 EINVAL**; **-3** EACCES; **-4** ENOENT; **-6** ENOMEM. |
 | 81h | WAIT | RSI = pid | child exit status | blocks the caller |
 | 82h | GETABI | — | ABI version (= 2) | osbkt `Syscall.GetABI()`; check at startup |
-| 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is delivered **once per Ctrl+C press** (its own return space; NOT ENOSYS). |
+| 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is delivered **once per Ctrl+C press** (its own return space; NOT ENOSYS). Buffered bytes are drained before the `-2`, so a line typed before Ctrl+C is consumed (then discarded by the aborting reader). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring and pending Ctrl+C are **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
 
 ### 6Ah `SpawnReq` — the SPAWNPATH argument block (final, v2)
 
@@ -127,10 +142,21 @@ typedef struct SpawnReq {   // 40 bytes, little-endian
 };                          // +40
 ```
 
-Validation (kernel, before any load): the block itself is in the user window;
-`pathPtr`/`pathLen` and `argsPtr`/`argsLen` are in range; `pathLen` in 1..260;
-`argsLen` in 0..128. Returns the child pid, or `-3` EACCES (file not
-executable by the caller), `-4` ENOENT, `-5` EINVAL (bad block), `-6` ENOMEM.
+Validation (kernel, before any load): the block itself is in the user window
+(a bad block pointer → **-1 EFAULT**); `pathPtr`/`pathLen` and
+`argsPtr`/`argsLen` are in range using the true **byte** length (a bad pointer
+→ **-1 EFAULT**); `pathLen` in 1..260; `argsLen` in 0..128; a handle ≠ -1 is
+rejected. Bad **content** (pathLen 0 or >260, argsLen >128, handle ≠ -1) →
+**-5 EINVAL**. The path is then resolved and checked to be a regular file
+(**-4 ENOENT** if not) and executable by the caller (**-3 EACCES**) — all
+**before** a task is created. Returns the child pid, or the error above;
+**-6 ENOMEM** if there is no room for the child.
+
+**Exec check (B3/S4):** the execute bit is checked for the caller's class
+(owner/group/other), never "any x bit". The caller's uid/gid come from
+`Scheduler.CurrentUid()`; in phase 1b this is **provisional** (always 0 — the
+console runs as root and there is no session/credential layer yet). 1c wires
+the real session uid in that one helper.
 
 ## Graphics + input (40h–59h, XWIN services; kernel `SyscallGfx.cs`)
 
