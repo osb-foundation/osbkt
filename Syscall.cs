@@ -69,22 +69,43 @@ namespace OsbKT
 
         // ---------- PUBLIC API ----------
 
-        // Text output via AH=09h PRINT ('$'-terminated).
-        private static void WriteStringAsBytes(string s, byte* dst)
+        // Text output via AH=01h WRITE with explicit length (chunked to the
+        // kernel's 4096-byte cap).
+        public static void Write(byte* buf, int len)
         {
-            fixed (char* p = s)
+            int off = 0;
+            while (off < len)
             {
-                int i = 0;
-                while (i < s.Length && i < 255) { dst[i] = (byte)p[i]; i++; }
-                dst[i] = (byte)'$';
+                int n = len - off;
+                if (n > 4096) n = 4096;
+                Invoke(WriteNum, arg1: (ulong)(buf + off), arg2: (ulong)n);
+                off += n;
+            }
+        }
+
+        // C# chars are UTF-16; OSB console text is ASCII, so each char is
+        // narrowed to its low byte into a stack buffer and written packed
+        // (chars > 255 are truncated).
+        public static void Print(char* buf, int len)
+        {
+            var tmp = stackalloc byte[1024];
+            int off = 0;
+            while (off < len)
+            {
+                int n = len - off;
+                if (n > 1024) n = 1024;
+                for (int i = 0; i < n; i++) tmp[i] = (byte)buf[off + i];
+                Invoke(WriteNum, arg1: (ulong)tmp, arg2: (ulong)n);
+                off += n;
             }
         }
 
         public static void PrintString(string s)
         {
-            var buf = stackalloc byte[256];
-            WriteStringAsBytes(s, buf);
-            Invoke(PrintStringNum, arg2: (ulong)buf);
+            fixed (char* p = s)
+            {
+                Print(p, s.Length);
+            }
         }
 
         public static int GetKeyScancode()
