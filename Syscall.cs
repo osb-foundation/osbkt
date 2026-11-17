@@ -12,7 +12,8 @@ namespace OsbKT
         private const int GetPidNum      = 0x30;
         private const int ExitNum        = 0x4C; // AL = exit code
         private const int SpawnNum       = 0x80; // AL = built-in program id
-        private const int SpawnPathNum   = 0x6A; // RDI=path, RSI=len, RDX=args, RCX=argsLen
+        private const int SpawnPathNum   = 0x6A; // RDI = SpawnReq* (final v2 form)
+        private const int GetCharNum     = 0x6E; // cooked console byte (serial+PS/2)
         private const int WaitNum        = 0x81; // RSI = pid
         private const int MemInfoNum     = 0x10;
         private const int GetAbiNum      = 0x82; // kernel ABI version (osbkt/docs/ABI.md)
@@ -31,6 +32,13 @@ namespace OsbKT
                                     ulong arg4 = 0) // RCX
         {
             return osb_syscall(((ulong)ah << 8) | al, arg1, arg2, arg3, arg4);
+        }
+
+        // Raw syscall invoke for tests (TPtr): full control over AH/AL and all
+        // four argument registers. Not part of the normal API surface.
+        public static int Raw(int ah, int al, ulong arg1, ulong arg2, ulong arg3, ulong arg4)
+        {
+            return (int)Invoke(ah, (ulong)al, arg1, arg2, arg3, arg4);
         }
 
         // ---------- Filesystem helpers (existing syscalls) ----------
@@ -135,16 +143,36 @@ namespace OsbKT
             return (int)Invoke(SpawnNum, al: programId);
         }
 
-        // Spawn an external program by path (AH=6Ah). `args` may be null with
-        // argsLen 0. Returns the child pid, or a negative error (-1 = not
-        // found / bad image / no slot). Minimal 1a.1 form: stdout/stdin are the
-        // console (no redirection handles yet); the full handle-based form is
-        // phase 1b (see docs/ABI.md).
-        public static int SpawnPath(char* path, int pathLen, char* args, int argsLen)
+        // SpawnReq: the 6Ah SPAWNPATH argument block (osbkt/docs/ABI.md).
+        // 40 bytes, little-endian. Explicit layout so the kernel's Rd32/Rd64
+        // offsets (0, 8, 16, 24, 32, 36) match exactly. stdin/stdout = -1
+        // inherit the console; a non -1 handle is rejected by the v2 kernel.
+        [StructLayout(LayoutKind.Explicit, Size = 40)]
+        public struct SpawnReq
         {
-            return (int)Invoke(SpawnPathNum,
-                               arg1: (ulong)path, arg2: (ulong)pathLen,
-                               arg3: (ulong)args, arg4: (ulong)argsLen);
+            [FieldOffset(0)]  public ulong PathPtr;       // +0  DOS path string
+            [FieldOffset(8)]  public uint PathLen;        // +8  path length (1..260)
+            [FieldOffset(16)] public ulong ArgsPtr;       // +16 argument string, or 0
+            [FieldOffset(24)] public uint ArgsLen;        // +24 argument length (0..128)
+            [FieldOffset(32)] public int StdinHandle;     // +32 read handle for child fd 0, or -1
+            [FieldOffset(36)] public int StdoutHandle;    // +36 write handle for child fd 1, or -1
+        }
+
+        // Spawn an external program by SpawnReq (AH=6Ah, final v2 form).
+        // Returns the child pid, or a negative error: -3 EACCES, -4 ENOENT,
+        // -5 EINVAL (bad block), -6 ENOMEM. The kernel validates the block and
+        // every pointer it holds (S3). `req` must stay alive for the call.
+        public static int SpawnPath(SpawnReq* req)
+        {
+            return (int)Invoke(SpawnPathNum, arg1: (ulong)req);
+        }
+
+        // GetChar: next cooked console byte (AH=6Eh). Merges serial + PS/2.
+        // Returns 0..255, -1 when empty (non-blocking), or -2 for a pending
+        // Ctrl+C (once per press). -2 here is NOT ENOSYS.
+        public static int GetChar()
+        {
+            return (int)Invoke(GetCharNum);
         }
 
         public static int Wait(int pid)
@@ -165,7 +193,7 @@ namespace OsbKT
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
-        public const ushort AbiVersion = 1;
+        public const ushort AbiVersion = 2;
 
         public static ushort GetABI()
         {
