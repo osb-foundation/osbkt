@@ -30,7 +30,7 @@ dotnet build
 
 ## Part of OSB
 
-This is part of the [OSB](https://github.com/osb-system) - Operating System Basic project, a DOS-like operating system built from scratch.
+This is part of the [OSB](https://github.com/osb-foundation) - Operating System Basic project, a DOS-like operating system built from scratch.
 
 ## License
 
