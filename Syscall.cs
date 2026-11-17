@@ -234,7 +234,8 @@ namespace OsbKT
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
-        public const ushort AbiVersion = 2;
+        // v3 (phase 1c): 6Ah/20h carry BYTE strings (B1), not UTF-16 chars.
+        public const ushort AbiVersion = 3;
 
         public static ushort GetABI()
         {

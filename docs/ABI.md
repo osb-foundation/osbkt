@@ -1,6 +1,6 @@
 # OSB Ring-3 ABI (v0)
 
-Version: **2** (GETABI, AH=82h). This document records the syscall ABI
+Version: **3** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
 `Cpu/SyscallGfx.cs`), so userspace programs (osb.shell, XWIN) can be written
 against a written contract. Planned additions live in
@@ -10,12 +10,20 @@ Version 2 (phase 1b) adds GETCHAR (6Eh) and replaces the provisional 1a.1
 SPAWNPATH (6Ah) with the final `SpawnReq` form. Version 1's 6Ah (RDI=path,
 RSI=len, RDX=args, RCX=argsLen) was **provisional** and is superseded.
 
-Version 2 is **unchanged** by phase 1b.1: the wire format of 6Ah (`SpawnReq`)
-and 20h (RESOLVE) is identical, so `AbiVersion` stays 2. What changed is the
-**string convention**, now documented below: every ring-3 string argument is a
-**byte string** (B1), 6Ah error codes were tightened (B4), and 20h rejects an
-out-of-range length instead of clamping (B2). Callers that already pass bytes
-(e.g. osbkt's `Print`/`Write`) are unaffected.
+### v2 -> v3 (phase 1c): 6Ah/20h are byte strings, not UTF-16 chars
+
+Version 2 kept `AbiVersion = 2` while changing the **string convention** of the
+path-taking syscalls: 6Ah SPAWNPATH (`pathPtr`/`argsPtr`) and 20h RESOLVE
+(`path`) now carry **byte strings with an explicit byte length** (B1), exactly
+like GETCWD (22h), GETARGS (23h) and WRITE (01h). The earlier convention passed
+a UTF-16 `char*` plus a **character** count. That is an incompatible wire-format
+change: a caller written for v2 that still passes a UTF-16 buffer with a
+character count will be misread by a v3 kernel (and vice-versa). Version 3
+therefore makes the change visible: `AbiVersion` is bumped to **3**, and a
+program that checks `GETABI < 3` refuses to run against a v3 kernel. No syscall
+number, register mapping, or error code changed — only the string encoding of
+the path/args buffers of 6Ah and 20h. (osb.xwin was audited: it uses only
+01h/40h–59h and never calls 20h/21h/6Ah or GETABI, so it is unaffected.)
 
 ## Calling convention
 
@@ -122,10 +130,10 @@ ext4 image at build time (kernel `build.sh`).
 | 80h | SPAWN | AL = built-in program id | child pid, -1 fail | ids: kernel-side built-ins only (HELLO/BAD/SPAWNER); not file spawn |
 | 6Ah | SPAWNPATH | RDI = `SpawnReq*` (see below) | child pid, or -1/-3/-4/-5/-6 | spawns the file named in `SpawnReq`. `stdinHandle`/`stdoutHandle` = -1 inherit the console, else an already-open handle the kernel validates **against the caller** (A5). Args capped at 128 bytes. The kernel resolves the path, checks it is a regular file and that the caller may execute it, **before** creating any task (a refusal leaves no child). Error codes (B4): any bad pointer (block/path/args) → **-1 EFAULT**; bad content (pathLen 0 or >260, argsLen >128, a handle ≠ -1) → **-5 EINVAL**; **-3** EACCES; **-4** ENOENT; **-6** ENOMEM. |
 | 81h | WAIT | RSI = pid | child exit status | blocks the caller |
-| 82h | GETABI | — | ABI version (= 2) | osbkt `Syscall.GetABI()`; check at startup |
+| 82h | GETABI | — | ABI version (= 3) | osbkt `Syscall.GetABI()`; check at startup |
 | 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is delivered **once per Ctrl+C press** (its own return space; NOT ENOSYS). Buffered bytes are drained before the `-2`, so a line typed before Ctrl+C is consumed (then discarded by the aborting reader). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring and pending Ctrl+C are **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
 
-### 6Ah `SpawnReq` — the SPAWNPATH argument block (final, v2)
+### 6Ah `SpawnReq` — the SPAWNPATH argument block (final, v3)
 
 RDI points to a caller-filled block (all pointers are user-window addresses;
 all lengths are bytes and must satisfy `ptr >= UserBase && ptr + len <=
@@ -192,7 +200,7 @@ LINK, STAT/CHMOD/CHOWN, environment, LOGIN/LOGOUT/SUDO/WHOAMI,
 TASKLIST/KILL/SETFG, CLEAR/SETCOLOR, DATETIME, network,
 PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–6Dh, 6Fh–7Fh.
 When added, this file gains the entries and GETABI is bumped.
-(6Ah SPAWNPATH and 6Eh GETCHAR are implemented in v2 above; the `SpawnReq`
+(6Ah SPAWNPATH and 6Eh GETCHAR are implemented in v3 above; the `SpawnReq`
 block is the final form, not the provisional 1a.1 `RDI=path` form.)
 
 OSLANG is kernel-internal (A12) and not part of this ABI.
