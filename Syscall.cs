@@ -12,6 +12,7 @@ namespace OsbKT
         private const int GetPidNum      = 0x30;
         private const int ExitNum        = 0x4C; // AL = exit code
         private const int SpawnNum       = 0x80; // AL = built-in program id
+        private const int SpawnPathNum   = 0x6A; // RDI=path, RSI=len, RDX=args, RCX=argsLen
         private const int WaitNum        = 0x81; // RSI = pid
         private const int MemInfoNum     = 0x10;
         private const int GetAbiNum      = 0x82; // kernel ABI version (osbkt/docs/ABI.md)
@@ -102,6 +103,9 @@ namespace OsbKT
 
         public static void PrintString(string s)
         {
+            // A null/empty string is a no-op (some callers pass a computed
+            // string that may be null); never dereference it.
+            if (s == null || s.Length == 0) return;
             fixed (char* p = s)
             {
                 Print(p, s.Length);
@@ -129,6 +133,18 @@ namespace OsbKT
         {
             // AH = 80h, AL = program id (F1: was passing the id in RSI)
             return (int)Invoke(SpawnNum, al: programId);
+        }
+
+        // Spawn an external program by path (AH=6Ah). `args` may be null with
+        // argsLen 0. Returns the child pid, or a negative error (-1 = not
+        // found / bad image / no slot). Minimal 1a.1 form: stdout/stdin are the
+        // console (no redirection handles yet); the full handle-based form is
+        // phase 1b (see docs/ABI.md).
+        public static int SpawnPath(char* path, int pathLen, char* args, int argsLen)
+        {
+            return (int)Invoke(SpawnPathNum,
+                               arg1: (ulong)path, arg2: (ulong)pathLen,
+                               arg3: (ulong)args, arg4: (ulong)argsLen);
         }
 
         public static int Wait(int pid)

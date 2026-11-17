@@ -80,6 +80,7 @@ ext4 image at build time (kernel `build.sh`).
 | 30h | GETPID | — | pid | |
 | 4Ch | EXIT | AL = exit code | never returns | task becomes zombie; reaped by WAIT |
 | 80h | SPAWN | AL = built-in program id | child pid, -1 fail | ids: kernel-side built-ins only (HELLO/BAD/SPAWNER); not file spawn |
+| 6Ah | SPAWNPATH | RDI=path, RSI=pathLen, RDX=args, RCX=argsLen | child pid, -1 fail | spawns the file at `path` (DOS path, e.g. `A:\OSB\BIN\X.EXE`); `args` may be null with argsLen 0. v0 minimal form (1a.1): stdin/stdout are the console, no redirection handles; the full handle-based form is phase 1b. -1 = not found / bad image / no slot |
 | 81h | WAIT | RSI = pid | child exit status | blocks the caller |
 | 82h | GETABI | — | ABI version (= 1) | osbkt `Syscall.GetABI()`; check at startup |
 
@@ -113,9 +114,11 @@ Packed coordinates: one argument carries `(x, y)` or `(w, h)` as
 ## Out of v0 (planned, see osb.shell/docs/MIGRATION.md §3)
 
 File writes (OPEN/READ/WRITE/CLOSE/LSEEK), CHDIR/MKDIR/RMDIR/UNLINK/RENAME/
-LINK, STAT/CHMOD/CHOWN, environment, LOGIN/LOGOUT/SUDO/WHOAMI, SPAWNPATH,
+LINK, STAT/CHMOD/CHOWN, environment, LOGIN/LOGOUT/SUDO/WHOAMI,
 TASKLIST/KILL/SETFG, GETCHAR (cooked), CLEAR/SETCOLOR, DATETIME, network,
-PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–6Fh, 70h–79h. When
-added, this file gains the entries and GETABI is bumped.
+PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–69h, 6Bh–6Fh, 70h–79h.
+When added, this file gains the entries and GETABI is bumped. (6Ah SPAWNPATH is
+already implemented in the 1a.1 minimal form above; the handle-based form will
+be phase 1b.)
 
 OSLANG is kernel-internal (A12) and not part of this ABI.
