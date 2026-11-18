@@ -102,6 +102,11 @@ namespace OsbKT
             return (int)Invoke(0x28, arg1: (ulong)oldPath, arg2: (ulong)oldLen, arg3: (ulong)newPath, arg4: (ulong)newLen);
         }
 
+        public static int Copy(byte* srcPath, int srcLen, byte* dstPath, int dstLen)
+        {
+            return (int)Invoke(0x29, arg1: (ulong)srcPath, arg2: (ulong)srcLen, arg3: (ulong)dstPath, arg4: (ulong)dstLen);
+        }
+
         // GETENV (63h): value of `name` (case-insensitive) as bytes, NUL-
         // terminated; returns the FULL value length (0 for a defined-but-empty
         // value), -4 ENOENT when undefined, -1 EFAULT, -5 EINVAL. With
