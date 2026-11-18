@@ -17,6 +17,8 @@ namespace OsbKT
         private const int WaitNum        = 0x81; // RSI = pid
         private const int MemInfoNum     = 0x10;
         private const int GetAbiNum      = 0x82; // kernel ABI version (osbkt/docs/ABI.md)
+        private const int GetEnvNum      = 0x63; // getenv(name,len,buf,cap); len 0 lists all
+        private const int SetEnvNum      = 0x64; // setenv(name,len,val,valLen) -> 1/0
         private const int TicksNum       = 0x54; // PIT tick count (SyscallGfx)
         private const int SleepNum       = 0x55; // sleep(ticks) (SyscallGfx)
         private const int LoginNum       = 0x65; // LOGIN(name,pass) session (1c)
@@ -52,6 +54,47 @@ namespace OsbKT
         public static int GetArgs(byte* buf, int cap)
         {
             return (int)Invoke(0x23, arg1: (ulong)buf, arg2: (ulong)cap);
+        }
+
+        // GETENV (63h): value of `name` (case-insensitive) as bytes, NUL-
+        // terminated; returns the FULL value length (0 for a defined-but-empty
+        // value), -4 ENOENT when undefined, -1 EFAULT, -5 EINVAL. With
+        // nameLen 0 the kernel writes every "NAME=VALUE\n" line (cap up to
+        // 1024) and returns the byte count.
+        public static int GetEnv(byte* name, int nameLen, byte* buf, int cap)
+        {
+            return (int)Invoke(GetEnvNum, arg1: (ulong)name, arg2: (ulong)nameLen,
+                arg3: (ulong)buf, arg4: (ulong)cap);
+        }
+
+        public static int GetEnv(string name, byte* buf, int cap)
+        {
+            if (name == null) return -4;
+            var nbuf = stackalloc byte[64];
+            int nlen = Narrow(name, nbuf, 64);
+            if (nlen <= 0) return -5;
+            return GetEnv(nbuf, nlen, buf, cap);
+        }
+
+        // SETENV (64h): define/redefine a variable. Returns false when the name
+        // is kernel-locked (USER/HOME), the store is full, or the arguments
+        // are invalid. A null `val` with valLen 0 deletes the variable.
+        public static bool SetEnv(byte* name, int nameLen, byte* val, int valLen)
+        {
+            return Invoke(SetEnvNum, arg1: (ulong)name, arg2: (ulong)nameLen,
+                arg3: (ulong)val, arg4: (ulong)valLen) == 0;
+        }
+
+        public static bool SetEnv(string name, string value)
+        {
+            if (name == null) return false;
+            var nbuf = stackalloc byte[64];
+            int nlen = Narrow(name, nbuf, 64);
+            if (nlen <= 0) return false;
+            var vbuf = stackalloc byte[256];
+            int vlen = Narrow(value, vbuf, 256);
+            if (vlen < 0) return false;
+            return SetEnv(nbuf, nlen, vbuf, vlen);
         }
 
         // Narrow a managed string to a byte buffer (B1: all ring-3 string
@@ -91,6 +134,25 @@ namespace OsbKT
         // stack). For ring-3 callers that hold a char* (the shell's completion
         // and PATH search) so they never reach for the register-level Raw().
         // Returns false on any kernel error; out params are 0 on failure.
+        // RESOLVE (20h) from a byte* path (the ABI string form). Lets a ring-3
+        // caller that already holds a byte buffer (the shell's PATH search)
+        // resolve without a narrowing copy and without Raw().
+        public static bool ResolvePath(byte* path, int len, out uint ino, out ushort mode, out ushort uid, out ulong size)
+        {
+            ino = 0; mode = 0; uid = 0; size = 0;
+            if (path == null || len <= 0) return false;
+            if (len > 260) len = 260;
+            byte* outBuf = stackalloc byte[16];
+            if (Invoke(0x20, arg1: (ulong)path, arg2: (ulong)len, arg3: (ulong)outBuf) != 1)
+                return false;
+            ino = (uint)(outBuf[0] | (outBuf[1] << 8) | (outBuf[2] << 16) | (outBuf[3] << 24));
+            mode = (ushort)(outBuf[4] | (outBuf[5] << 8));
+            uid = (ushort)(outBuf[6] | (outBuf[7] << 8));
+            size = 0;
+            for (int k = 0; k < 8; k++) size |= ((ulong)outBuf[8 + k]) << (k * 8);
+            return true;
+        }
+
         public static bool ResolvePath(char* path, int len, out uint ino, out ushort mode, out ushort uid, out ulong size)
         {
             ino = 0; mode = 0; uid = 0; size = 0;
@@ -257,9 +319,9 @@ namespace OsbKT
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
-        // v4 (phase 1c): session identity (65h-69h); v3 made 6Ah/20h byte
-        // strings (B1).
-        public const ushort AbiVersion = 4;
+        // v5 (phase 3, slice 3): environment (63h/64h); v4 (phase 1c): session
+        // identity (65h-69h); v3 made 6Ah/20h byte strings (B1).
+        public const ushort AbiVersion = 5;
 
         public static ushort GetABI()
         {

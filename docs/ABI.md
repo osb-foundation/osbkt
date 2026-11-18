@@ -1,6 +1,6 @@
 # OSB Ring-3 ABI (v0)
 
-Version: **4** (GETABI, AH=82h). This document records the syscall ABI
+Version: **5** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
 `Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs`), so userspace programs
 (osb.shell, XWIN) can be written against a written contract. Planned additions
@@ -154,6 +154,8 @@ ext4 image at build time (kernel `build.sh`).
 | 67h | SUDO | — | 0 ok, -3 EACCES | Elevates the **calling task's** effective uid to 0 iff the session user is in SUDOERS. Children spawned while elevated inherit uid 0. |
 | 68h | END_SUDO | — | 0 | Restores the calling task's effective uid to the session user's real uid. |
 | 69h | WHOAMI | RDI=buf, RSI=cap | name length, -1 EFAULT, -3 EACCES (not logged in) | Writes the session user's name (bytes). Never password data. |
+| 63h | GETENV | RDI=name, RSI=nameLen, RDX=buf, RCX=cap | value length (0 for empty), -4 ENOENT (unset), -1 EFAULT, -5 EINVAL (name > 64) | Per-task store (v5). nameLen 0 lists every `NAME=VALUE\n` (cap up to 1024). Names are case-insensitive. |
+| 64h | SETENV | RDI=name, RSI=nameLen, RDX=val, RCX=valLen | 0 ok, -1 EFAULT, -3 EACCES (locked USER/HOME), -5 EINVAL, -6 ENOMEM | Per-task store (v5). val NULL + valLen 0 deletes. Names 1..64, values 0..256. |
 
 ### 6Ah `SpawnReq` — the SPAWNPATH argument block (final, v3)
 
@@ -215,12 +217,28 @@ Packed coordinates: one argument carries `(x, y)` or `(w, h)` as
 | 58h | POWEROFF | — | never returns (ACPI S5). **root-only** (1c, I3): -3 EACCES for non-root |
 | 59h | REBOOT | — | never returns (8042 pulse). **root-only** (1c, I3): -3 EACCES for non-root |
 
+### v4 -> v5 (slice 3): per-task environment (63h/64h)
+
+Version 5 adds **63h GETENV** and **64h SETENV**. The environment is
+**kernel-owned and per-task**: every task slot has a private variable store,
+and a spawn copies the parent's store (changes never propagate back). Strings
+are byte strings with explicit lengths (validated with `UserPtr`). Error codes:
+GETENV returns the full value length (0 for a defined-but-empty value), **-4
+ENOENT** when undefined, **-1 EFAULT**, **-5 EINVAL** (name > 64). With
+nameLen 0 it writes every `NAME=VALUE\\n` line (cap up to 1024) and returns
+the byte count. SETENV returns 0 on success, **-1 EFAULT**, **-3 EACCES** when
+the name is kernel-locked (USER/HOME), **-5 EINVAL** (bad name/oversize),
+**-6 ENOMEM** (store full). A NULL value pointer with length 0 **deletes**
+the variable. USER and HOME are set by the kernel at LOGIN/LOGOUT and are
+read-only from every task (including elevated ones); the environment never
+leaks across LOGOUT/LOGIN.
+
 ## Out of v0 (planned, see osb.shell/docs/MIGRATION.md §3)
 
 File writes (OPEN/READ/WRITE/CLOSE/LSEEK), CHDIR/MKDIR/RMDIR/UNLINK/RENAME/
-LINK, STAT/CHMOD/CHOWN, environment,
+LINK, STAT/CHMOD/CHOWN,
 TASKLIST/KILL/SETFG, CLEAR/SETCOLOR, DATETIME, network,
-PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–64h, 6Ah–6Dh, 6Fh–7Fh.
+PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–62h, 6Ah–6Dh, 6Fh–7Fh.
 When added, this file gains the entries and GETABI is bumped.
 (6Ah SPAWNPATH, 6Eh GETCHAR and 65h–69h session identity are implemented in v4
 above; the `SpawnReq` block is the final form, not the provisional 1a.1
