@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace OsbKT
 {
-    public static unsafe class Syscall
+    public static unsafe partial class Syscall
     {
         // Syscall numbers (AH)
         private const int WriteNum       = 0x01; // write(buf in RDI, len in RSI)
@@ -39,12 +39,8 @@ namespace OsbKT
             return osb_syscall(((ulong)ah << 8) | al, arg1, arg2, arg3, arg4);
         }
 
-        // Raw syscall invoke for tests (TPtr): full control over AH/AL and all
-        // four argument registers. Not part of the normal API surface.
-        public static int Raw(int ah, int al, ulong arg1, ulong arg2, ulong arg3, ulong arg4)
-        {
-            return (int)Invoke(ah, (ulong)al, arg1, arg2, arg3, arg4);
-        }
+        // Raw syscall invoke: test-only (TPtr). Moved to Syscall.Raw.cs so the
+        // normal API surface never exposes register-level control; see that file.
 
         // ---------- Filesystem helpers (existing syscalls) ----------
 
@@ -82,6 +78,28 @@ namespace OsbKT
             if (plen < 0) return false;
             byte* outBuf = stackalloc byte[16];
             if (Invoke(0x20, arg1: (ulong)pbuf, arg2: (ulong)plen, arg3: (ulong)outBuf) != 1)
+                return false;
+            ino = (uint)(outBuf[0] | (outBuf[1] << 8) | (outBuf[2] << 16) | (outBuf[3] << 24));
+            mode = (ushort)(outBuf[4] | (outBuf[5] << 8));
+            uid = (ushort)(outBuf[6] | (outBuf[7] << 8));
+            size = 0;
+            for (int k = 0; k < 8; k++) size |= ((ulong)outBuf[8 + k]) << (k * 8);
+            return true;
+        }
+
+        // RESOLVE (20h) from a char* path (UTF-16 narrowed to bytes on the
+        // stack). For ring-3 callers that hold a char* (the shell's completion
+        // and PATH search) so they never reach for the register-level Raw().
+        // Returns false on any kernel error; out params are 0 on failure.
+        public static bool ResolvePath(char* path, int len, out uint ino, out ushort mode, out ushort uid, out ulong size)
+        {
+            ino = 0; mode = 0; uid = 0; size = 0;
+            if (path == null || len <= 0) return false;
+            if (len > 260) len = 260;
+            var pbuf = stackalloc byte[260];
+            for (int k = 0; k < len; k++) pbuf[k] = (byte)path[k];
+            byte* outBuf = stackalloc byte[16];
+            if (Invoke(0x20, arg1: (ulong)pbuf, arg2: (ulong)len, arg3: (ulong)outBuf) != 1)
                 return false;
             ino = (uint)(outBuf[0] | (outBuf[1] << 8) | (outBuf[2] << 16) | (outBuf[3] << 24));
             mode = (ushort)(outBuf[4] | (outBuf[5] << 8));

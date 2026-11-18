@@ -25,6 +25,7 @@
          (sibling checkout, see README.md "Sibling checkouts"). -->
     <Compile Include="../osb.core/src/MiniCoreLib.cs" Link="MiniCoreLib.cs" />
     <Compile Include="Syscall.cs" />
+    <Compile Include="Syscall.Raw.cs" />
     <Reference Include="System.Runtime.InteropServices" />
   </ItemGroup>
 
