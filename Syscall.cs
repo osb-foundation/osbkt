@@ -97,6 +97,11 @@ namespace OsbKT
             return (int)Invoke(0x27, arg1: (ulong)path, arg2: (ulong)len);
         }
 
+        public static int Rename(byte* oldPath, int oldLen, byte* newPath, int newLen)
+        {
+            return (int)Invoke(0x28, arg1: (ulong)oldPath, arg2: (ulong)oldLen, arg3: (ulong)newPath, arg4: (ulong)newLen);
+        }
+
         // GETENV (63h): value of `name` (case-insensitive) as bytes, NUL-
         // terminated; returns the FULL value length (0 for a defined-but-empty
         // value), -4 ENOENT when undefined, -1 EFAULT, -5 EINVAL. With
