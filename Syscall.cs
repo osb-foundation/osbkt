@@ -107,6 +107,11 @@ namespace OsbKT
             return (int)Invoke(0x29, arg1: (ulong)srcPath, arg2: (ulong)srcLen, arg3: (ulong)dstPath, arg4: (ulong)dstLen);
         }
 
+        public static int Ln(byte* line, int len)
+        {
+            return (int)Invoke(0x61, arg1: (ulong)line, arg2: (ulong)len);
+        }
+
         // GETENV (63h): value of `name` (case-insensitive) as bytes, NUL-
         // terminated; returns the FULL value length (0 for a defined-but-empty
         // value), -4 ENOENT when undefined, -1 EFAULT, -5 EINVAL. With
