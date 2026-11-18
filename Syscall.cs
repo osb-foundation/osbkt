@@ -83,6 +83,30 @@ namespace OsbKT
             Invoke(0x2C, arg1: (ulong)handle);
         }
 
+        // 0x76 CREATEFILE(path, len) -> handle (create/truncate for writing)
+        public static int CreateFile(byte* path, int len)
+        {
+            return (int)Invoke(0x76, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
+        // 0x77 WRITEFILE(handle, data, dataLen) -> bytes written
+        public static int WriteFile(int handle, byte* data, int count)
+        {
+            return (int)Invoke(0x77, arg1: (ulong)handle, arg2: (ulong)data, arg3: (ulong)count);
+        }
+
+        // 0x78 SETSTDOUT(handle) -> sets current task's stdout handle (-1 = VGA)
+        public static void SetStdout(int handle)
+        {
+            Invoke(0x78, arg1: (ulong)handle);
+        }
+
+        // 0x79 SETSTDIN(handle) -> sets current task's stdin handle (-1 = console)
+        public static void SetStdin(int handle)
+        {
+            Invoke(0x79, arg1: (ulong)handle);
+        }
+
         // STAT (60h): mode/uid/gid/size/mtime/links. out buffer is 16 bytes.
         public static bool Stat(byte* path, int len, byte* outBuf)
         {
@@ -507,9 +531,9 @@ namespace OsbKT
                 arg3: (ulong)pass, arg4: (ulong)passLen);
         }
 
-        public static int UserOpDel(byte* name, int nameLen)
+        public static int UserOpDel(byte* name, int nameLen, uint flags = 0)
         {
-            return (int)Invoke(UserOpNum, al: 3, arg1: (ulong)name, arg2: (ulong)nameLen);
+            return (int)Invoke(UserOpNum, al: 3, arg1: (ulong)name, arg2: (ulong)nameLen, arg3: (ulong)flags);
         }
 
         public static int UserOpSudo(byte* name, int nameLen)
