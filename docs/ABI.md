@@ -1,6 +1,6 @@
 # OSB Ring-3 ABI (v0)
 
-Version: **5** (GETABI, AH=82h). This document records the syscall ABI
+Version: **6** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
 `Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs`), so userspace programs
 (osb.shell, XWIN) can be written against a written contract. Planned additions
@@ -61,8 +61,10 @@ re-LOGIN share the same teardown path.
   meanings are frozen (A7) and must not be redefined by later ABI versions.
   SPAWNPATH (6Ah) uses its own negative codes: `-3` EACCES (not executable by
   the caller), `-4` ENOENT (no such file), `-5` EINVAL (bad `SpawnReq`
-  content), `-6` ENOMEM (no room for the child). GETCHAR (6Eh) has its **own
-  return space** (see its row); its `-2` means Ctrl+C, **not** ENOSYS.
+  content), `-6` ENOMEM (no room for the child). WAIT (81h) returns **-7**
+  EINTR when a Ctrl+C arrives while waiting (the child keeps running).
+  GETCHAR (6Eh) has its **own return space** (see its row); its `-2` means
+  Ctrl+C, **not** ENOSYS.
 * **String convention (B1):** every ring-3 **string argument is a BYTE string**
   (ASCII/UTF-8), with an explicit byte length — the same convention as GETCWD
   (22h), GETARGS (23h) and WRITE (01h). This applies to 6Ah (`pathPtr`/`argsPtr`
@@ -119,6 +121,10 @@ u32 entry, u32 size — matching `Scheduler.SpawnFile`).
 |---|---|---|---|---|
 | 01h | WRITE | RDI=buf, RSI=len | RAX = bytes written (max 4096), -1 EFAULT | bytes to VGA console; serial mirrors automatically. **osbkt uses 01h for all text output (F2): `PrintString`/`PutChar`/`Print` no longer use 09h, so `$` no longer terminates text and long strings work** |
 | 09h | PRINT | RSI = `$`-terminated string | 0, -1 EFAULT | scans up to 4096 bytes for `$`; kept for XWIN compatibility, unused by osbkt |
+| 6Fh | CLEAR | — | 0 | console clear + serial `ESC[2J H` |
+| 70h | SETCOLOR | fg (AL), bg (AH) | 0 / -5 EINVAL (fg==bg) | console attribute |
+| 71h | GETCOLOR | out: fg, bg (2 bytes at RDI) | 0 / -1 EFAULT | reads the current console attribute |
+| 72h | DATETIME | out 8B (Y,M,D,h,m,s,0,0 at RDI) | 0 / -1 EFAULT | RTC: year, month, day, hour, minute, second |
 
 ## Memory
 
@@ -146,8 +152,11 @@ ext4 image at build time (kernel `build.sh`).
 | 4Ch | EXIT | AL = exit code | never returns | task becomes zombie; reaped by WAIT |
 | 80h | SPAWN | AL = built-in program id | child pid, -1 fail | ids: kernel-side built-ins only (HELLO/BAD/SPAWNER); not file spawn |
 | 6Ah | SPAWNPATH | RDI = `SpawnReq*` (see below) | child pid, or -1/-3/-4/-5/-6 | spawns the file named in `SpawnReq`. `stdinHandle`/`stdoutHandle` = -1 inherit the console, else an already-open handle the kernel validates **against the caller** (A5). Args capped at 128 bytes. The kernel resolves the path, checks it is a regular file and that the caller may execute it, **before** creating any task (a refusal leaves no child). Error codes (B4): any bad pointer (block/path/args) → **-1 EFAULT**; bad content (pathLen 0 or >260, argsLen >128, a handle ≠ -1) → **-5 EINVAL**; **-3** EACCES; **-4** ENOENT; **-6** ENOMEM. |
-| 81h | WAIT | RSI = pid | child exit status | blocks the caller |
-| 82h | GETABI | — | ABI version (= 4) | osbkt `Syscall.GetABI()`; check at startup |
+| 6Bh | TASKLIST | RDI = out buffer, RSI = cap | count of tasks written | Writes up to `cap/16` task records (16 bytes each: pid u32, state u32, name[8]). Only tasks with the same uid as the caller (or all, if root) are listed. |
+| 6Ch | KILL | RDI = pid | 0 ok / -3 denied / -4 not found | Terminates a task. Console (pid 1) cannot be killed; only same-uid or root callers may kill. |
+| 6Dh | SETFG | RDI = pid | 0 ok / -3 denied / -4 not found | Marks a task as the foreground job. Only same-uid or root callers. |
+| 81h | WAIT | RSI = pid | child exit status, -1 unknown / already gone, **-7 EINTR** on Ctrl+C | blocks the caller; a Ctrl+C aborts the wait but leaves the child running |
+| 82h | GETABI | — | ABI version (= 6) | osbkt `Syscall.GetABI()`; check at startup |
 | 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is a Ctrl+C marker delivered **in arrival order** (P0.2: the ring holds byte/`-2` entries, so a line typed after Ctrl+C is a new line, not merged with the aborted one). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring is **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
 | 65h | LOGIN | RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (byte strings) | 0 ok, -1 EFAULT, -3 EACCES | Kernel-owned session (1c). Verifies against PASSWD; unknown user and wrong password are the same **-3**. Only the **session leader** may LOGIN. An empty name or a name ≥ NameCap is rejected **-3** (never truncated). A LOGIN while a session is active first tears that session down (LOGOUT), then authenticates. On success sets session uid/gid/user and cwd to the user's home. Password is never returned by any syscall. |
 | 66h | LOGOUT | — | 0 ok, -3 EACCES | Only the **session leader**. Kills every task in the session except the leader and kernel tasks (session 0), clears the session user. The shell then prints a fresh `login:`. |
@@ -233,15 +242,52 @@ the variable. USER and HOME are set by the kernel at LOGIN/LOGOUT and are
 read-only from every task (including elevated ones); the environment never
 leaks across LOGOUT/LOGIN.
 
+### v5 -> v6 (slice 6): console, color, datetime, interruptible wait
+
+Version 6 adds **6Fh CLEAR**, **70h SETCOLOR**, **71h GETCOLOR**, **72h
+DATETIME**, makes **81h WAIT** interruptible (Ctrl+C returns **-7 EINTR**,
+the child keeps running), and gates **6Ch KILL** / **6Dh SETFG** on uid
+(same-uid or root; never the console).
+
+### v6 -> v7 (slice 7): account management (USER / CHOWN / CHMOD)
+
+Version 7 adds **73h CHMOD**, **74h CHOWN**, and **75h USEROP**. The shell's
+`USER`, `CHOWN`, and `CHMOD` commands now call these kernel syscalls via
+osbkt instead of being stubs.
+
+**73h CHMOD(path RDI, len RSI, mode RDX)** -> 0 ok / -3 EACCES / -4 not found
+/ -5 EINVAL / -1 EFAULT
+Root or the file owner may set the low 12 permission bits. Mode is passed in
+DL (low byte of RDX); file-type bits are preserved.
+
+**74h CHOWN(path RDI, len RSI, uid RDX)** -> 0 ok / -3 EACCES / -4 not found
+/ -5 EINVAL / -1 EFAULT
+Root only. Changes the owning uid of the file at `path`.
+
+**75h USEROP(sub in AL)** — account management.
+  AL=0 LIST:  RDI=buf, RSI=cap -> writes "name uid home sudo*\n" per user,
+              returns byte count
+  AL=1 ADD:   RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (root only)
+  AL=2 CHANGEPASS: RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (root or own)
+  AL=3 DEL:   RDI=name, RSI=nameLen (root only, not root user)
+  AL=4 SUDO:  RDI=name, RSI=nameLen (root only)
+  AL=5 UNSUDO: RDI=name, RSI=nameLen (root only)
+Returns 0 ok / -3 EACCES / -4 not found / -5 EINVAL / -6 ENOMEM / -1 EFAULT.
+
+osbkt wrappers: `Chmod(byte*,int,ushort)`, `Chown(byte*,int,uint)`,
+`UserOpList(byte*,int)`, `UserOpAdd(byte*,int,byte*,int)`,
+`UserOpChangePass(byte*,int,byte*,int)`, `UserOpDel(byte*,int)`,
+`UserOpSudo(byte*,int)`, `UserOpUnsudo(byte*,int)`.
+
 ## Out of v0 (planned, see osb.shell/docs/MIGRATION.md §3)
 
 File writes (OPEN/READ/WRITE/CLOSE/LSEEK), CHDIR/MKDIR/RMDIR/UNLINK/RENAME/
 LINK, STAT/CHMOD/CHOWN,
-TASKLIST/KILL/SETFG, CLEAR/SETCOLOR, DATETIME, network,
-PCI, USEROP. Reserved function numbers: 24h–2Fh, 60h–62h, 6Ah–6Dh, 6Fh–7Fh.
-When added, this file gains the entries and GETABI is bumped.
-(6Ah SPAWNPATH, 6Eh GETCHAR and 65h–69h session identity are implemented in v4
-above; the `SpawnReq` block is the final form, not the provisional 1a.1
+TASKLIST/KILL/SETFG, USEROP, network, PCI. Reserved function numbers:
+24h–2Fh, 60h–62h, 6Ah–6Dh, 6Fh–7Fh. When added, this file gains the entries
+and GETABI is bumped. (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR, 72h DATETIME,
+6Ah SPAWNPATH, 6Eh GETCHAR and 65h–69h session identity are implemented above;
+the `SpawnReq` block is the final form, not the provisional 1a.1
 `RDI=path` form.)
 
 OSLANG is kernel-internal (A12) and not part of this ABI.

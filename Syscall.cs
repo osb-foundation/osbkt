@@ -26,6 +26,13 @@ namespace OsbKT
         private const int SudoNum        = 0x67; // SUDO() elevate caller
         private const int EndSudoNum     = 0x68; // END_SUDO() restore caller
         private const int WhoAmINum      = 0x69; // WHOAMI(buf,cap) -> name
+        private const int ClearNum       = 0x6F; // CLEAR (console clear)
+        private const int SetColorNum    = 0x70; // SETCOLOR(fg AL, bg AH)
+        private const int GetColorNum    = 0x71; // GETCOLOR(out fg, out bg)
+        private const int DateTimeNum    = 0x72; // DATETIME(out 8B)
+        private const int ChmodNum       = 0x73; // CHMOD(path,len,mode) -> int
+        private const int ChownNum       = 0x74; // CHOWN(path,len,uid) -> int
+        private const int UserOpNum      = 0x75; // USEROP(sub,...) -> int
 
         // Register-based gate (osbkt/crt0.S): RAX = AH<<8 | AL, then
         // RDI, RSI, RDX, RCX arguments; result in RAX.
@@ -354,6 +361,24 @@ namespace OsbKT
             return (int)Invoke(SpawnPathNum, arg1: (ulong)(&req));
         }
 
+        // TaskList: enumerate visible tasks. Returns count written.
+        public static int TaskList(byte* buf, int cap)
+        {
+            return (int)Invoke(0x6B, arg1: (ulong)buf, arg2: (ulong)cap);
+        }
+
+        // Kill: terminate a task by pid. Returns 0 ok, -3 denied, -4 not found.
+        public static bool Kill(int pid)
+        {
+            return Invoke(0x6C, arg1: (ulong)pid) == 0;
+        }
+
+        // SetForeground: make a task the foreground job. Returns 0 ok, -3 denied, -4 not found.
+        public static bool SetForeground(int pid)
+        {
+            return Invoke(0x6D, arg1: (ulong)pid) == 0;
+        }
+
         // GetChar: next cooked console byte (AH=6Eh). Merges serial + PS/2.
         // Returns 0..255, -1 when empty (non-blocking), or -2 for a pending
         // Ctrl+C (once per press). -2 here is NOT ENOSYS.
@@ -380,9 +405,11 @@ namespace OsbKT
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
+        // v6 (slice 6): console (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR,
+        // 72h DATETIME); WAIT interruptible (-7 EINTR); KILL/SETFG uid-gated.
         // v5 (phase 3, slice 3): environment (63h/64h); v4 (phase 1c): session
         // identity (65h-69h); v3 made 6Ah/20h byte strings (B1).
-        public const ushort AbiVersion = 5;
+        public const ushort AbiVersion = 7;
 
         public static ushort GetABI()
         {
@@ -419,6 +446,93 @@ namespace OsbKT
 
         public static int WhoAmI(byte* buf, int cap)
             => (int)Invoke(WhoAmINum, arg1: (ulong)buf, arg2: (ulong)cap);
+
+        // ----- console (6Fh-72h, slice 6+) -----
+
+        public static void Clear()
+        {
+            Invoke(ClearNum);
+        }
+
+        public static void SetColor(int fg, int bg)
+        {
+            // fg in AL, bg in AH
+            Invoke(SetColorNum, al: (ulong)((byte)fg | ((byte)bg << 8)));
+        }
+
+        public static void GetColor(out int fg, out int bg)
+        {
+            var buf = stackalloc byte[2];
+            Invoke(GetColorNum, arg1: (ulong)buf);
+            fg = buf[0];
+            bg = buf[1];
+        }
+
+        public static void DateTime(out int y, out int mo, out int d, out int h, out int mi, out int s)
+        {
+            var buf = stackalloc byte[8];
+            Invoke(DateTimeNum, arg1: (ulong)buf);
+            y = buf[0]; mo = buf[1]; d = buf[2]; h = buf[3]; mi = buf[4]; s = buf[5];
+        }
+
+        // ----- account management (73h-75h, slice 7) -----
+
+        public static int Chmod(byte* path, int len, ushort mode)
+        {
+            // mode in DX (RDX)
+            return (int)Invoke(ChmodNum, arg1: (ulong)path, arg2: (ulong)len, arg3: (ulong)mode);
+        }
+
+        public static int Chown(byte* path, int len, uint uid)
+        {
+            // uid in DX (RDX)
+            return (int)Invoke(ChownNum, arg1: (ulong)path, arg2: (ulong)len, arg3: (ulong)uid);
+        }
+
+        // USEROP subfunctions
+        public static int UserOpList(byte* buf, int cap)
+        {
+            return (int)Invoke(UserOpNum, al: 0, arg1: (ulong)buf, arg2: (ulong)cap);
+        }
+
+        public static int UserOpAdd(byte* name, int nameLen, byte* pass, int passLen)
+        {
+            return (int)Invoke(UserOpNum, al: 1, arg1: (ulong)name, arg2: (ulong)nameLen,
+                arg3: (ulong)pass, arg4: (ulong)passLen);
+        }
+
+        public static int UserOpChangePass(byte* name, int nameLen, byte* pass, int passLen)
+        {
+            return (int)Invoke(UserOpNum, al: 2, arg1: (ulong)name, arg2: (ulong)nameLen,
+                arg3: (ulong)pass, arg4: (ulong)passLen);
+        }
+
+        public static int UserOpDel(byte* name, int nameLen)
+        {
+            return (int)Invoke(UserOpNum, al: 3, arg1: (ulong)name, arg2: (ulong)nameLen);
+        }
+
+        public static int UserOpSudo(byte* name, int nameLen)
+        {
+            return (int)Invoke(UserOpNum, al: 4, arg1: (ulong)name, arg2: (ulong)nameLen);
+        }
+
+        public static int UserOpUnsudo(byte* name, int nameLen)
+        {
+            return (int)Invoke(UserOpNum, al: 5, arg1: (ulong)name, arg2: (ulong)nameLen);
+        }
+
+        // ----- machine (privileged, root only - decision 5) -----
+
+        public static void PowerOff()
+        {
+            Invoke(0x58);
+        }
+
+        public static void Reboot()
+        {
+            Invoke(0x59);
+        }
 
         // ----- time (SyscallGfx 54h/55h) -----
 
