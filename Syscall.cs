@@ -82,6 +82,11 @@ namespace OsbKT
             return Invoke(0x60, arg1: (ulong)path, arg2: (ulong)len, arg3: (ulong)outBuf) == 1;
         }
 
+        public static int Mkdir(byte* path, int len)
+        {
+            return (int)Invoke(0x25, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
         // GETENV (63h): value of `name` (case-insensitive) as bytes, NUL-
         // terminated; returns the FULL value length (0 for a defined-but-empty
         // value), -4 ENOENT when undefined, -1 EFAULT, -5 EINVAL. With
