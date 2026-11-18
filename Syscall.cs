@@ -56,6 +56,32 @@ namespace OsbKT
             return (int)Invoke(0x23, arg1: (ulong)buf, arg2: (ulong)cap);
         }
 
+        public static int ChDir(byte* path, int len)
+        {
+            return (int)Invoke(0x24, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
+        public static int Open(byte* path, int len)
+        {
+            return (int)Invoke(0x2A, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
+        public static int Read(int handle, byte* buf, int count)
+        {
+            return (int)Invoke(0x2B, arg1: (ulong)handle, arg2: (ulong)buf, arg3: (ulong)count);
+        }
+
+        public static void Close(int handle)
+        {
+            Invoke(0x2C, arg1: (ulong)handle);
+        }
+
+        // STAT (60h): mode/uid/gid/size/mtime/links. out buffer is 16 bytes.
+        public static bool Stat(byte* path, int len, byte* outBuf)
+        {
+            return Invoke(0x60, arg1: (ulong)path, arg2: (ulong)len, arg3: (ulong)outBuf) == 1;
+        }
+
         // GETENV (63h): value of `name` (case-insensitive) as bytes, NUL-
         // terminated; returns the FULL value length (0 for a defined-but-empty
         // value), -4 ENOENT when undefined, -1 EFAULT, -5 EINVAL. With
