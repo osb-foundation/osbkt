@@ -21,6 +21,7 @@ namespace OsbKT
         private const int SetEnvNum      = 0x64; // setenv(name,len,val,valLen) -> 1/0
         private const int TicksNum       = 0x54; // PIT tick count (SyscallGfx)
         private const int SleepNum       = 0x55; // sleep(ticks) (SyscallGfx)
+        private const int MemGrowNum     = 0x11; // MEMGROW (11h): grant memory in 2 MiB steps
         private const int LoginNum       = 0x65; // LOGIN(name,pass) session (1c)
         private const int LogoutNum      = 0x66; // LOGOUT()
         private const int SudoNum        = 0x67; // SUDO() elevate caller
@@ -68,9 +69,27 @@ namespace OsbKT
             return (int)Invoke(0x24, arg1: (ulong)path, arg2: (ulong)len);
         }
 
+        public static int ChDir(string path)
+        {
+            if (path == null) return -5;
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return -5;
+            return (int)Invoke(0x24, arg1: (ulong)pbuf, arg2: (ulong)plen);
+        }
+
         public static int Open(byte* path, int len)
         {
             return (int)Invoke(0x2A, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
+        public static int Open(string path)
+        {
+            if (path == null) return -5;
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return -5;
+            return (int)Invoke(0x2A, arg1: (ulong)pbuf, arg2: (ulong)plen);
         }
 
         public static int Read(int handle, byte* buf, int count)
@@ -87,6 +106,15 @@ namespace OsbKT
         public static int CreateFile(byte* path, int len)
         {
             return (int)Invoke(0x76, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
+        public static int CreateFile(string path)
+        {
+            if (path == null) return -5;
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return -5;
+            return (int)Invoke(0x76, arg1: (ulong)pbuf, arg2: (ulong)plen);
         }
 
         // 0x77 WRITEFILE(handle, data, dataLen) -> bytes written
@@ -113,9 +141,27 @@ namespace OsbKT
             return Invoke(0x60, arg1: (ulong)path, arg2: (ulong)len, arg3: (ulong)outBuf) == 1;
         }
 
+        public static bool Stat(string path, byte* outBuf)
+        {
+            if (path == null) return false;
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return false;
+            return Invoke(0x60, arg1: (ulong)pbuf, arg2: (ulong)plen, arg3: (ulong)outBuf) == 1;
+        }
+
         public static int Mkdir(byte* path, int len)
         {
             return (int)Invoke(0x25, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
+        public static int Mkdir(string path)
+        {
+            if (path == null) return -5;
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return -5;
+            return (int)Invoke(0x25, arg1: (ulong)pbuf, arg2: (ulong)plen);
         }
 
         public static int Rmdir(byte* path, int len)
@@ -123,9 +169,27 @@ namespace OsbKT
             return (int)Invoke(0x26, arg1: (ulong)path, arg2: (ulong)len);
         }
 
+        public static int Rmdir(string path)
+        {
+            if (path == null) return -5;
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return -5;
+            return (int)Invoke(0x26, arg1: (ulong)pbuf, arg2: (ulong)plen);
+        }
+
         public static int Delete(byte* path, int len)
         {
             return (int)Invoke(0x27, arg1: (ulong)path, arg2: (ulong)len);
+        }
+
+        public static int Delete(string path)
+        {
+            if (path == null) return -5;
+            var pbuf = stackalloc byte[260];
+            int plen = Narrow(path, pbuf, 260);
+            if (plen < 0) return -5;
+            return (int)Invoke(0x27, arg1: (ulong)pbuf, arg2: (ulong)plen);
         }
 
         public static int Rename(byte* oldPath, int oldLen, byte* newPath, int newLen)
@@ -133,14 +197,47 @@ namespace OsbKT
             return (int)Invoke(0x28, arg1: (ulong)oldPath, arg2: (ulong)oldLen, arg3: (ulong)newPath, arg4: (ulong)newLen);
         }
 
+        public static int Rename(string oldPath, string newPath)
+        {
+            if (oldPath == null || newPath == null) return -5;
+            var opbuf = stackalloc byte[260];
+            var npbuf = stackalloc byte[260];
+            int oplen = Narrow(oldPath, opbuf, 260);
+            int nplen = Narrow(newPath, npbuf, 260);
+            if (oplen < 0 || nplen < 0) return -5;
+            return (int)Invoke(0x28, arg1: (ulong)opbuf, arg2: (ulong)oplen, arg3: (ulong)npbuf, arg4: (ulong)nplen);
+        }
+
         public static int Copy(byte* srcPath, int srcLen, byte* dstPath, int dstLen)
         {
             return (int)Invoke(0x29, arg1: (ulong)srcPath, arg2: (ulong)srcLen, arg3: (ulong)dstPath, arg4: (ulong)dstLen);
         }
 
+        public static int Copy(string srcPath, string dstPath)
+        {
+            if (srcPath == null || dstPath == null) return -5;
+            var spbuf = stackalloc byte[260];
+            var dpbuf = stackalloc byte[260];
+            int splen = Narrow(srcPath, spbuf, 260);
+            int dplen = Narrow(dstPath, dpbuf, 260);
+            if (splen < 0 || dplen < 0) return -5;
+            return (int)Invoke(0x29, arg1: (ulong)spbuf, arg2: (ulong)splen, arg3: (ulong)dpbuf, arg4: (ulong)dplen);
+        }
+
         public static int Ln(byte* line, int len)
         {
             return (int)Invoke(0x61, arg1: (ulong)line, arg2: (ulong)len);
+        }
+
+        public static int Ln(string targetPath, string linkPath)
+        {
+            if (targetPath == null || linkPath == null) return -5;
+            var tpbuf = stackalloc byte[260];
+            var lpbuf = stackalloc byte[260];
+            int tplen = Narrow(targetPath, tpbuf, 260);
+            int lplen = Narrow(linkPath, lpbuf, 260);
+            if (tplen < 0 || lplen < 0) return -5;
+            return (int)Invoke(0x61, arg1: (ulong)tpbuf, arg2: (ulong)tplen, arg3: (ulong)lpbuf, arg4: (ulong)lplen);
         }
 
         public static int Trash(byte* line, int len)
@@ -426,6 +523,16 @@ namespace OsbKT
             freeKB  = buffer[2];
         }
 
+        // MEMGROW (11h): grant memory in 2 MiB steps (512 frames).
+        // RDI = requested additional frames (must be multiple of 512, or 0 to query current limit).
+        // Returns: 0 on success; current frames on query (RDI=0). Negative on error:
+        // -1 EFAULT, -5 EINVAL (not multiple of 512 or exceeds per-process limit),
+        // -6 ENOMEM (insufficient physical frames), -3 EACCES.
+        public static int MemGrow(int requestedFrames)
+        {
+            return (int)Invoke(MemGrowNum, arg1: (ulong)requestedFrames);
+        }
+
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
@@ -433,7 +540,7 @@ namespace OsbKT
         // 72h DATETIME); WAIT interruptible (-7 EINTR); KILL/SETFG uid-gated.
         // v5 (phase 3, slice 3): environment (63h/64h); v4 (phase 1c): session
         // identity (65h-69h); v3 made 6Ah/20h byte strings (B1).
-        public const ushort AbiVersion = 7;
+        public const ushort AbiVersion = 8;
 
         public static ushort GetABI()
         {

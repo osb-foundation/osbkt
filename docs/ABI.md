@@ -1,8 +1,8 @@
-# OSB Ring-3 ABI (v7)
+# OSB Ring-3 ABI (v8)
 
-Version: **7** (GETABI, AH=82h). This document records the syscall ABI
+Version: **8** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
-`Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs`), so userspace programs
+`Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs` + `Cpu/Syscalls.File.cs` partials), so userspace programs
 (osb.shell, XWIN) can be written against a written contract. Planned additions
 live in `osb.shell/docs/MIGRATION.md` §3 and will bump this version.
 
@@ -41,6 +41,86 @@ or a name ≥ `NameCap` with **-3** (it never truncates), and a LOGIN while a
 session is already active first performs the LOGOUT teardown (kills the session's
 tasks except the leader and kernel tasks) before authenticating. 66h LOGOUT and a
 re-LOGIN share the same teardown path.
+
+### v4 -> v5 (slice 3): per-task environment (63h/64h)
+
+Version 5 adds **63h GETENV** and **64h SETENV**. The environment is
+**kernel-owned and per-task**: every task slot has a private variable store,
+and a spawn copies the parent's store (changes never propagate back). Strings
+are byte strings with explicit lengths (validated with `UserPtr`). Error codes:
+GETENV returns the full value length (0 for a defined-but-empty value), **-4
+ENOENT** when undefined, **-1 EFAULT**, **-5 EINVAL** (name > 64). With
+nameLen 0 it writes every `NAME=VALUE\n` line (cap up to 1024) and returns
+the byte count. SETENV returns 0 on success, **-1 EFAULT**, **-3 EACCES** when
+the name is kernel-locked (USER/HOME), **-5 EINVAL** (bad name/oversize),
+**-6 ENOMEM** (store full). A NULL value pointer with length 0 **deletes**
+the variable. USER and HOME are set by the kernel at LOGIN/LOGOUT and are
+read-only from every task (including elevated ones); the environment never
+leaks across LOGOUT/LOGIN.
+
+### v5 -> v6 (slice 6): console, color, datetime, interruptible wait
+
+Version 6 adds **6Fh CLEAR**, **70h SETCOLOR**, **71h GETCOLOR**, **72h
+DATETIME**, makes **81h WAIT** interruptible (Ctrl+C returns **-7 EINTR**,
+the child keeps running), and gates **6Ch KILL** / **6Dh SETFG** on uid
+(same-uid or root; never the console).
+
+### v6 -> v7 (slice 7): account management (USER / CHOWN / CHMOD)
+
+Version 7 adds **73h CHMOD**, **74h CHOWN**, and **75h USEROP**. The shell's
+`USER`, `CHOWN`, and `CHMOD` commands now call these kernel syscalls via
+osbkt instead of being stubs.
+
+**73h CHMOD(path RDI, len RSI, mode RDX)** -> 0 ok / -3 EACCES / -4 not found
+/ -5 EINVAL / -1 EFAULT
+Root or the file owner may set the low 12 permission bits. Mode is passed in
+DL (low byte of RDX); file-type bits are preserved.
+
+**74h CHOWN(path RDI, len RSI, uid RDX)** -> 0 ok / -3 EACCES / -4 not found
+/ -5 EINVAL / -1 EFAULT
+Root only. Changes the owning uid of the file at `path`.
+
+**75h USEROP(sub in AL)** — account management.
+  AL=0 LIST:  RDI=buf, RSI=cap -> writes "name uid home sudo*\n" per user,
+            returns byte count
+  AL=1 ADD:   RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (root only)
+  AL=2 CHANGEPASS: RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (root or own)
+  AL=3 DEL:   RDI=name, RSI=nameLen (root only, not root user)
+  AL=4 SUDO:  RDI=name, RSI=nameLen (root only)
+  AL=5 UNSUDO: RDI=name, RSI=nameLen (root only)
+Returns 0 ok / -3 EACCES / -4 not found / -5 EINVAL / -6 ENOMEM / -1 EFAULT.
+
+osbkt wrappers: `Chmod(byte*,int,ushort)`, `Chown(byte*,int,uint)`,
+`UserOpList(byte*,int)`, `UserOpAdd(byte*,int,byte*,int)`,
+`UserOpChangePass(byte*,int,byte*,int)`, `UserOpDel(byte*,int)`,
+`UserOpSudo(byte*,int)`, `UserOpUnsudo(byte*,int)`.
+
+### v7 -> v8 (slice 8): filesystem write operations (24h–2Ch, 60h, 61h, 76h–79h)
+
+Version 8 adds full filesystem write support: directory management, file
+manipulation, file I/O, and I/O redirection. All path arguments follow the
+**byte string convention (B1)** with explicit byte lengths. All pointer
+arguments are validated with `UserPtr` (A7). Permission checks use the
+session uid/gid (I3).
+
+| AH | Name | Args | Returns | Notes |
+|---|---|---|---|---|
+| 24h | CHDIR | RDI=path (bytes), RSI=len | 0 ok, -3 EACCES, -4 not found, -5 EINVAL, -1 EFAULT | Changes global CWD |
+| 25h | MKDIR | RDI=path (bytes), RSI=len, RDX=mode | 0 ok, -3 EACCES, -4 not found, -5 EINVAL, -6 ENOSPC, -7 EEXIST, -1 EFAULT | Creates directory with `.` and `..` |
+| 26h | RMDIR | RDI=path (bytes), RSI=len | 0 ok, -3 EACCES, -4 not found, -5 ENOTEMPTY, -1 EFAULT | Removes empty directory |
+| 27h | READDIR | RDI=path (bytes), RSI=len, RDX=index, RCX=out, R8=cap | 1 entry, 0 end/fail | Reads directory by path (vs 21h by inode) |
+| 27h | UNLINK | RDI=path (bytes), RSI=len | 0 ok, -3 EACCES, -4 not found, -5 EINVAL (is dir), -1 EFAULT | Deletes regular file |
+| 28h | RENAME | RDI=oldPath, RSI=oldLen, RDX=newPath, RCX=newLen | 0 ok, -3 EACCES, -4 not found, -5 EINVAL, -7 EEXIST, -1 EFAULT | Renames/moves file or dir |
+| 29h | COPY | RDI=srcPath, RSI=srcLen, RDX=dstPath, RCX=dstLen | 0 ok, -3 EACCES, -4 not found, -5 EINVAL, -6 ENOSPC, -7 EEXIST, -1 EFAULT | Copies regular file |
+| 2Ah | OPEN | RDI=path (bytes), RSI=len, RDX=mode | handle, -3 EACCES, -4 not found, -5 EINVAL, -6 ENOSPC, -1 EFAULT | Opens file; mode: 1=read, 2=write, 4=append, 8=create |
+| 2Bh | READ | RDI=handle, RSI=buf, RDX=count | bytes read, -1 EFAULT, -5 EINVAL | Reads up to 4096 bytes |
+| 2Ch | CLOSE | RDI=handle | 0 | Closes file handle |
+| 60h | STAT | RDI=path (bytes), RSI=len, RDX=out(16B) | 1 ok, 0 fail | Returns mode, uid, gid, size, mtime, links |
+| 61h | LINK | RDI=targetPath, RSI=targetLen, RDX=linkPath, RCX=linkLen | 0 ok, -3 EACCES, -4 not found, -5 EINVAL, -7 EEXIST, -1 EFAULT | Creates hard link to regular file |
+| 76h | CREATEFILE | RDI=path (bytes), RSI=len | handle, -3 EACCES, -4 not found, -5 EINVAL, -6 ENOSPC, -1 EFAULT | Creates/truncates file, returns handle |
+| 77h | WRITEFILE | RDI=handle, RSI=data, RDX=count | bytes written, -1 EFAULT, -5 EINVAL | Writes up to 64 KiB |
+| 78h | SETSTDOUT | RDI=handle | 0, -5 EINVAL | Redirects stdout (-1 = console) |
+| 79h | SETSTDIN | RDI=handle | 0, -5 EINVAL | Redirects stdin (-1 = console) |
 
 ## Calling convention
 
@@ -282,9 +362,9 @@ osbkt wrappers: `Chmod(byte*,int,ushort)`, `Chown(byte*,int,uint)`,
 ## Out of v0 (planned, see osb.shell/docs/MIGRATION.md §3)
 
 File writes (OPEN/READ/WRITE/CLOSE/LSEEK), CHDIR/MKDIR/RMDIR/UNLINK/RENAME/
-LINK, STAT/CHMOD/CHOWN,
-TASKLIST/KILL/SETFG, USEROP, network, PCI. Reserved function numbers:
-24h–2Fh, 60h–62h, 6Ah–6Dh, 6Fh–7Fh. When added, this file gains the entries
+LINK, STAT/CHMOD/CHOWN, SETSTDIN/SETSTDOUT/CREATEFILE/WRITEFILE — **implemented in v8**.
+Remaining: TASKLIST/KILL/SETFG, USEROP, network, PCI. Reserved function numbers:
+2Eh–2Fh, 62h, 6Ah–6Dh, 7Ah–7Fh. When added, this file gains the entries
 and GETABI is bumped. (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR, 72h DATETIME,
 6Ah SPAWNPATH, 6Eh GETCHAR and 65h–69h session identity are implemented above;
 the `SpawnReq` block is the final form, not the provisional 1a.1
