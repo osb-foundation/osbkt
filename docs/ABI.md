@@ -1,6 +1,6 @@
-# OSB Ring-3 ABI (v0)
+# OSB Ring-3 ABI (v7)
 
-Version: **6** (GETABI, AH=82h). This document records the syscall ABI
+Version: **7** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
 `Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs`), so userspace programs
 (osb.shell, XWIN) can be written against a written contract. Planned additions
@@ -156,7 +156,7 @@ ext4 image at build time (kernel `build.sh`).
 | 6Ch | KILL | RDI = pid | 0 ok / -3 denied / -4 not found | Terminates a task. Console (pid 1) cannot be killed; only same-uid or root callers may kill. |
 | 6Dh | SETFG | RDI = pid | 0 ok / -3 denied / -4 not found | Marks a task as the foreground job. Only same-uid or root callers. |
 | 81h | WAIT | RSI = pid | child exit status, -1 unknown / already gone, **-7 EINTR** on Ctrl+C | blocks the caller; a Ctrl+C aborts the wait but leaves the child running |
-| 82h | GETABI | — | ABI version (= 6) | osbkt `Syscall.GetABI()`; check at startup |
+| 82h | GETABI | — | ABI version (= 7) | osbkt `Syscall.GetABI()`; check at startup |
 | 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is a Ctrl+C marker delivered **in arrival order** (P0.2: the ring holds byte/`-2` entries, so a line typed after Ctrl+C is a new line, not merged with the aborted one). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring is **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
 | 65h | LOGIN | RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (byte strings) | 0 ok, -1 EFAULT, -3 EACCES | Kernel-owned session (1c). Verifies against PASSWD; unknown user and wrong password are the same **-3**. Only the **session leader** may LOGIN. An empty name or a name ≥ NameCap is rejected **-3** (never truncated). A LOGIN while a session is active first tears that session down (LOGOUT), then authenticates. On success sets session uid/gid/user and cwd to the user's home. Password is never returned by any syscall. |
 | 66h | LOGOUT | — | 0 ok, -3 EACCES | Only the **session leader**. Kills every task in the session except the leader and kernel tasks (session 0), clears the session user. The shell then prints a fresh `login:`. |
