@@ -21,9 +21,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Single MiniCoreLib source: link the canonical copy from osb.core
-         (sibling checkout, see README.md "Sibling checkouts"). -->
-    <Compile Include="../osb.core/src/MiniCoreLib.cs" Link="MiniCoreLib.cs" />
+    <!-- mini-CoreLib sources: link the canonical copies from osb.core
+         (sibling checkout, see README.md "Sibling checkouts"). osb.core keeps
+         the library in several src/*.cs files, so the whole directory is
+         linked (MiniCoreLib.cs alone no longer defines the primitives). -->
+    <Compile Include="../osb.core/src/*.cs" Link="osb.core/%(Filename)%(Extension)" />
     <Compile Include="Syscall.cs" />
     <Compile Include="Syscall.Raw.cs" />
     <Reference Include="System.Runtime.InteropServices" />

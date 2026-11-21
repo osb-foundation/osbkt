@@ -39,7 +39,7 @@ it in the same commit as any syscall change.
 
 Consumers (osb.shell, osb.xwin, osb.kernel) are expected side by side with
 this repo; they consume osbkt by **linked sources** (`Syscall.cs`) plus the
-canonical MiniCoreLib from `osb.core/src/MiniCoreLib.cs`. There is no
+canonical mini-CoreLib from `osb.core/src/*.cs`. There is no
 osbkt.dll at runtime; each consumer is a single freestanding NativeAOT
 module.
 
