@@ -17,8 +17,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
+      - name: Checkout osbkt
         uses: actions/checkout@v4
+
+      - name: Checkout osb.core
+        uses: actions/checkout@v4
+        with:
+          repository: osb-foundation/osb.core
+          path: ../osb.core
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
