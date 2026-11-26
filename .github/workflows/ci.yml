@@ -25,15 +25,11 @@ jobs:
         with:
           dotnet-version: 10.0.400
 
+      - name: Install Cake tool
+        run: dotnet tool install --global Cake.Tool
+
       - name: Validate version metadata (SemVer)
-        run: |
-          python3 - <<'PY'
-          import json, re
-          d = json.load(open("version.json"))
-          v = d["version"]
-          assert re.match(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z\-.]+)?(?:\+[0-9A-Za-z\-.]+)?$", v), v
-          print(f"version OK: {d['component']} {v}")
-          PY
+        run: dotnet cake scripts/validate-version.cake --versionJson=version.json --expectGeneration=0 --expectCodename=Olorun
 
       - name: Build OSB Toolkit (osbkt)
         run: dotnet build -c Release OsbKT.csproj -v q -nologo
