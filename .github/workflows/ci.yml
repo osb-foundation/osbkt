@@ -17,14 +17,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Check out side by side inside the workspace (workspace-relative paths,
+      # never ../). The build steps run with working-directory: osbkt.
       - name: Checkout osbkt
         uses: actions/checkout@v4
+        with:
+          path: osbkt
 
       - name: Checkout osb.core
         uses: actions/checkout@v4
         with:
           repository: osb-foundation/osb.core
-          path: ../osb.core
+          path: osb.core
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -36,6 +40,8 @@ jobs:
 
       - name: Validate version metadata (SemVer)
         run: dotnet cake scripts/validate-version.cake --versionJson=version.json --expectGeneration=0 --expectCodename=Olorun
+        working-directory: osbkt
 
       - name: Build OSB Toolkit (osbkt)
         run: dotnet build -c Release OsbKT.csproj -v q -nologo
+        working-directory: osbkt
