@@ -1,6 +1,6 @@
-# OSB Ring-3 ABI (v9)
+# OSB Ring-3 ABI (v10)
 
-Version: **9** (GETABI, AH=82h). This document records the syscall ABI
+Version: **10** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
 `Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs` + `Cpu/Syscalls.File.cs` partials), so userspace programs
 (osb.shell, XWIN) can be written against a written contract. Planned additions
@@ -25,6 +25,36 @@ changes are:
   the next PID would not fit in `int`, so the `int` return is always lossless.
 
 A program that checks `GETABI` should require **≥ 9** to use 64-bit PIDs.
+
+### v9 -> v10 (Card 3.1): non-blocking topic IPC (83h–8Ah)
+
+Version 10 is **additive**: every v9 operation keeps its number and behavior.
+It adds a non-blocking, topic-based IPC surface (8 syscalls, `83h`–`8Ah`; see
+the **IPC** section below). The kernel reports `GETABI = 10`; osbkt is written
+against 10 and a program should require **≥ 10** to use IPC.
+
+- **Handles are u64** = `(generation << 32) | index`. The generation defeats
+  stale-handle reuse: a handle whose generation no longer matches the live slot
+  is rejected `ENOENT`. `CREATE` returns a topic handle; `PUBLISH` returns a
+  **MessageId** (u64, monotonic, distinct from any handle); `RECEIVE` returns a
+  per-subscriber **Delivery** handle (u64) used by `ACK`/`FAIL`.
+- **Errors** are a negative `RAX` (`IpcStatus`): `0` Ok, `-1` EFAULT, `-2`
+  ENOSYS, `-3` EACCES, `-4` ENOENT, `-5` EINVAL, `-6` ENOMEM, `-7` EINTR,
+  `-8` EBADF, `-9` QueueFull, `-10` EAGAIN. `-9`/`-10` are IPC-specific.
+- **Receive is non-blocking** only: it returns `-10` EAGAIN when nothing is
+  queued. Blocking receive is **not** in v10.
+- **Explicit ACK**: `RECEIVE` does not acknowledge; the caller must `ACK` the
+  Delivery (or `FAIL` it). No auto-ACK, no implicit retries, no background
+  worker.
+- **Authorization (minimal secure model)**: Ring 3 cannot create or publish to
+  **system** topics (Kernel-only, `EACCES`); a **dynamic** topic is owned by its
+  creator and only the owner (or Kernel) may publish/destroy it; `SUBSCRIBE` is
+  idempotent per (pid, topic). A full ACL matrix is **deferred**.
+- **Topic name**: a byte string, length `1..31`, no NUL, case-sensitive.
+- **Limits** (internal, not ABI-guaranteed): MaxTopics 64, MaxSubscriptions 256,
+  QueueDepth 8, MaxPayload 64 KiB, MaxIpcMemory 1 MiB, MaxAttempts 3.
+
+A program that checks `GETABI` should require **≥ 10** to use IPC.
 
 Version 2 (phase 1b) adds GETCHAR (6Eh) and replaces the provisional 1a.1
 SPAWNPATH (6Ah) with the final `SpawnReq` form. Version 1's 6Ah (RDI=path,
@@ -256,7 +286,7 @@ ext4 image at build time (kernel `build.sh`).
 | 6Ch | KILL | RDI = pid (u64) | 0 ok / -3 denied / -4 not found | Terminates a task. Console (pid 1) cannot be killed; only same-uid or root callers may kill. Unknown/out-of-range pid → -4. |
 | 6Dh | SETFG | RDI = pid (u64) | 0 ok / -3 denied / -4 not found | Marks a task as the foreground job. Only same-uid or root callers. |
 | 81h | WAIT | RSI = pid (u64) | child exit status, -1 unknown / already gone, **-7 EINTR** on Ctrl+C | blocks the caller; a Ctrl+C aborts the wait but leaves the child running |
-| 82h | GETABI | — | ABI version (= 9) | osbkt `Syscall.GetABI()`; check at startup |
+| 82h | GETABI | — | ABI version (= 10) | osbkt `Syscall.GetABI()`; check at startup |
 | 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is a Ctrl+C marker delivered **in arrival order** (P0.2: the ring holds byte/`-2` entries, so a line typed after Ctrl+C is a new line, not merged with the aborted one). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring is **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
 | 65h | LOGIN | RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (byte strings) | 0 ok, -1 EFAULT, -3 EACCES | Kernel-owned session (1c). Verifies against PASSWD; unknown user and wrong password are the same **-3**. Only the **session leader** may LOGIN. An empty name or a name ≥ NameCap is rejected **-3** (never truncated). A LOGIN while a session is active first tears that session down (LOGOUT), then authenticates. On success sets session uid/gid/user and cwd to the user's home. Password is never returned by any syscall. |
 | 66h | LOGOUT | — | 0 ok, -3 EACCES | Only the **session leader**. Kills every task in the session except the leader and kernel tasks (session 0), clears the session user. The shell then prints a fresh `login:`. |
@@ -298,6 +328,24 @@ rejected. Bad **content** (pathLen 0 or >260, argsLen >128, handle ≠ -1) →
 `Scheduler.CurrentUid()`; in phase 1b this is **provisional** (always 0 — the
 console runs as root and there is no session/credential layer yet). 1c wires
 the real session uid in that one helper.
+
+## IPC (83h–8Ah, v10)
+
+Non-blocking topic IPC. All handles are u64 `(generation<<32)|index`. A negative
+`RAX` is an `IpcStatus` error (see v9→v10 above); a non-negative `RAX` is the
+result. Pointers are user-window addresses (`UserBase ≤ ptr`, `ptr+len ≤
+UserLimit`). The caller PID is Kernel-derived, never taken from the frame.
+
+| AH | Name | Args | Returns | Notes |
+|---|---|---|---|---|
+| 83h | IPC_CREATE | RDI=name, RSI=len (1..31), AL=flags (bit0 system) | topic handle (u64), or negative error | Ring 3 cannot create system topics (`-3`). Owner = caller. |
+| 84h | IPC_DESTROY | RDI=topic handle | 0 ok, negative error | Destroys the topic and cancels its deliveries. Owner or Kernel only. |
+| 85h | IPC_SUBSCRIBE | RDI=topic handle | 0 ok, negative error | Idempotent per (pid, topic). |
+| 86h | IPC_UNSUBSCRIBE | RDI=topic handle | 0 ok, `-4` if not subscribed | Cancels the caller's deliveries on the topic. |
+| 87h | IPC_PUBLISH | RDI=topic, RSI=payload, RDX=len (0..65536) | MessageId (u64), or negative error | Atomic fan-out; `-9` QueueFull means **no** partial delivery. Owner or Kernel only. |
+| 88h | IPC_RECEIVE | RDI=topic, RSI=dest, RDX=cap, RCX=out 24-byte view | 0 ok, `-10` EAGAIN empty, negative error | Non-blocking. Does **not** ACK. View = `{ MessageId u64, Delivery u64, Size int32 }` (little-endian). |
+| 89h | IPC_ACK | RDI=delivery handle | 0 ok, negative error | Explicit; frees the delivery's capacity. |
+| 8Ah | IPC_FAIL | RDI=delivery handle, AL=transient (0/1) | 0 ok, negative error | transient retries the **same** Delivery ID (≤ MaxAttempts); else terminal. |
 
 ## Graphics + input (40h–59h, XWIN services; kernel `SyscallGfx.cs`)
 

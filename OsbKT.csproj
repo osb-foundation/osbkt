@@ -28,6 +28,7 @@
     <Compile Include="../osb.core/src/*.cs" Link="osb.core/%(Filename)%(Extension)" />
     <Compile Include="Syscall.cs" />
     <Compile Include="Syscall.Raw.cs" />
+    <Compile Include="Syscall.Ipc.cs" />
     <Reference Include="System.Runtime.InteropServices" />
   </ItemGroup>
 

@@ -5,6 +5,6 @@
   "generation": 0,
   "release": false,
   "codename": "Olorun",
-  "description": "OSB ring-3 toolkit: INT 21h syscall wrappers, crt0.S, user.ld, mkosbx.py and the ABI contract (docs/ABI.md, AbiVersion 8).",
+  "description": "OSB ring-3 toolkit: INT 21h syscall wrappers, crt0.S, user.ld, mkosbx.py and the ABI contract (docs/ABI.md, AbiVersion 10).",
   "repository": "osb-foundation/osbkt"
 }

@@ -570,6 +570,8 @@ namespace OsbKT
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
+        // v10 (Card 3.1, phase 3): non-blocking topic IPC (83h-8Ah) — CreateTopic,
+        // DestroyTopic, Subscribe, Unsubscribe, Publish, Receive, Ack, Fail.
         // v9 (Card 3): 64-bit process identity. GETPID (30h) returns a u64 PID;
         // TASKLIST (6Bh) records are 20 bytes (pid u64, state u32, name[8]);
         // KILL (6Ch)/SETFG (6Dh)/WAIT (81h) take a u64 PID. PIDs are Kernel-
@@ -578,7 +580,7 @@ namespace OsbKT
         // 72h DATETIME); WAIT interruptible (-7 EINTR); KILL/SETFG uid-gated.
         // v5 (phase 3, slice 3): environment (63h/64h); v4 (phase 1c): session
         // identity (65h-69h); v3 made 6Ah/20h byte strings (B1).
-        public const ushort AbiVersion = 9;
+        public const ushort AbiVersion = 10;
 
         public static ushort GetABI()
         {
