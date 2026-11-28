@@ -421,9 +421,10 @@ namespace OsbKT
             return (int)Invoke(GetKeyScancodeNum);
         }
 
-        public static uint GetPid()
+        // GETPID (30h): the caller's authoritative 64-bit PID (Card 3).
+        public static ulong GetPid()
         {
-            return (uint)Invoke(GetPidNum);
+            return Invoke(GetPidNum);
         }
 
         public static void Exit(int exitCode)
@@ -498,13 +499,33 @@ namespace OsbKT
         // Kill: terminate a task by pid. Returns 0 ok, -3 denied, -4 not found.
         public static bool Kill(int pid)
         {
-            return Invoke(0x6C, arg1: (ulong)pid) == 0;
+            return KillStatus((ulong)pid) == 0;
+        }
+
+        // Kill (u64 pid): the authoritative 64-bit process identity (Card 3).
+        public static bool Kill(ulong pid)
+        {
+            return KillStatus(pid) == 0;
+        }
+
+        // KillStatus (u64 pid): raw 6Ch result so callers can distinguish
+        // 0 ok / -3 denied (unauthorized or console) / -4 not found (unknown or
+        // already terminated). Card 8 (KILL) uses this for precise messages.
+        public static int KillStatus(ulong pid)
+        {
+            return (int)Invoke(0x6C, arg1: pid);
         }
 
         // SetForeground: make a task the foreground job. Returns 0 ok, -3 denied, -4 not found.
         public static bool SetForeground(int pid)
         {
             return Invoke(0x6D, arg1: (ulong)pid) == 0;
+        }
+
+        // SetForeground (u64 pid).
+        public static bool SetForeground(ulong pid)
+        {
+            return Invoke(0x6D, arg1: pid) == 0;
         }
 
         // GetChar: next cooked console byte (AH=6Eh). Merges serial + PS/2.
@@ -518,6 +539,12 @@ namespace OsbKT
         public static int Wait(int pid)
         {
             return (int)Invoke(WaitNum, arg2: (ulong)pid);
+        }
+
+        // Wait (u64 pid): the authoritative 64-bit process identity (Card 3).
+        public static int Wait(ulong pid)
+        {
+            return (int)Invoke(WaitNum, arg2: pid);
         }
 
         public static void MemInfo(out ulong totalKB, out ulong usedKB, out ulong freeKB)
@@ -543,11 +570,15 @@ namespace OsbKT
         // ----- ABI version check (AH=82h) -----
         // The ABI version this osbkt is written against (docs/ABI.md). Call
         // GetABI() once at startup and refuse to run on a mismatch.
+        // v9 (Card 3): 64-bit process identity. GETPID (30h) returns a u64 PID;
+        // TASKLIST (6Bh) records are 20 bytes (pid u64, state u32, name[8]);
+        // KILL (6Ch)/SETFG (6Dh)/WAIT (81h) take a u64 PID. PIDs are Kernel-
+        // owned, incremental from 1, never reused within a boot.
         // v6 (slice 6): console (6Fh CLEAR, 70h SETCOLOR, 71h GETCOLOR,
         // 72h DATETIME); WAIT interruptible (-7 EINTR); KILL/SETFG uid-gated.
         // v5 (phase 3, slice 3): environment (63h/64h); v4 (phase 1c): session
         // identity (65h-69h); v3 made 6Ah/20h byte strings (B1).
-        public const ushort AbiVersion = 8;
+        public const ushort AbiVersion = 9;
 
         public static ushort GetABI()
         {

@@ -1,10 +1,30 @@
-# OSB Ring-3 ABI (v8)
+# OSB Ring-3 ABI (v9)
 
-Version: **8** (GETABI, AH=82h). This document records the syscall ABI
+Version: **9** (GETABI, AH=82h). This document records the syscall ABI
 **exactly as implemented today** (osb.kernel `Cpu/Syscalls.cs` +
 `Cpu/SyscallGfx.cs` + `Cpu/Syscalls.Identity.cs` + `Cpu/Syscalls.File.cs` partials), so userspace programs
 (osb.shell, XWIN) can be written against a written contract. Planned additions
 live in `osb.shell/docs/MIGRATION.md` §3 and will bump this version.
+
+### v8 -> v9 (Card 3): 64-bit process identity
+
+Version 9 makes the **process identifier an unsigned 64-bit integer** end to end.
+The PID is Kernel-owned, allocated incrementally starting at **1** on the first
+process after boot, and **never reused** within the same boot (the sequence resets
+only on a new boot). Ring 3 cannot choose, forge, or replace its PID. The wire
+changes are:
+
+- **GETPID (30h)** returns the full u64 PID in RAX (previously the low 32 bits).
+- **TASKLIST (6Bh)** records are now **20 bytes**: `pid u64`, `state u32`,
+  `name[8]` (previously 16 bytes with a u32 pid).
+- **KILL (6Ch)**, **SETFG (6Dh)** and **WAIT (81h)** take a **u64 PID**
+  (RDI/RSI respectively). A PID that does not name a live/zombie task is
+  "not found"; out-of-range values are simply not found (never truncated).
+- **SPAWN (80h)** / **SPAWNPATH (6Ah)** still return the child PID as a signed
+  `int` (negative = error). The kernel refuses a spawn rather than truncate when
+  the next PID would not fit in `int`, so the `int` return is always lossless.
+
+A program that checks `GETABI` should require **≥ 9** to use 64-bit PIDs.
 
 Version 2 (phase 1b) adds GETCHAR (6Eh) and replaces the provisional 1a.1
 SPAWNPATH (6Ah) with the final `SpawnReq` form. Version 1's 6Ah (RDI=path,
@@ -228,15 +248,15 @@ ext4 image at build time (kernel `build.sh`).
 
 | AH | Name | Args | Returns | Notes |
 |---|---|---|---|---|
-| 30h | GETPID | — | pid | |
+| 30h | GETPID | — | pid (u64) | The caller's authoritative 64-bit PID. |
 | 4Ch | EXIT | AL = exit code | never returns | task becomes zombie; reaped by WAIT |
-| 80h | SPAWN | AL = built-in program id | child pid, -1 fail | ids: kernel-side built-ins only (HELLO/BAD/SPAWNER); not file spawn |
-| 6Ah | SPAWNPATH | RDI = `SpawnReq*` (see below) | child pid, or -1/-3/-4/-5/-6 | spawns the file named in `SpawnReq`. `stdinHandle`/`stdoutHandle` = -1 inherit the console, else an already-open handle the kernel validates **against the caller** (A5). Args capped at 128 bytes. The kernel resolves the path, checks it is a regular file and that the caller may execute it, **before** creating any task (a refusal leaves no child). Error codes (B4): any bad pointer (block/path/args) → **-1 EFAULT**; bad content (pathLen 0 or >260, argsLen >128, a handle ≠ -1) → **-5 EINVAL**; **-3** EACCES; **-4** ENOENT; **-6** ENOMEM. |
-| 6Bh | TASKLIST | RDI = out buffer, RSI = cap | count of tasks written | Writes up to `cap/16` task records (16 bytes each: pid u32, state u32, name[8]). Only tasks with the same uid as the caller (or all, if root) are listed. |
-| 6Ch | KILL | RDI = pid | 0 ok / -3 denied / -4 not found | Terminates a task. Console (pid 1) cannot be killed; only same-uid or root callers may kill. |
-| 6Dh | SETFG | RDI = pid | 0 ok / -3 denied / -4 not found | Marks a task as the foreground job. Only same-uid or root callers. |
-| 81h | WAIT | RSI = pid | child exit status, -1 unknown / already gone, **-7 EINTR** on Ctrl+C | blocks the caller; a Ctrl+C aborts the wait but leaves the child running |
-| 82h | GETABI | — | ABI version (= 7) | osbkt `Syscall.GetABI()`; check at startup |
+| 80h | SPAWN | AL = built-in program id | child pid (int), -1 fail | ids: kernel-side built-ins only (HELLO/BAD/SPAWNER); not file spawn |
+| 6Ah | SPAWNPATH | RDI = `SpawnReq*` (see below) | child pid (int), or -1/-3/-4/-5/-6 | spawns the file named in `SpawnReq`. `stdinHandle`/`stdoutHandle` = -1 inherit the console, else an already-open handle the kernel validates **against the caller** (A5). Args capped at 128 bytes. The kernel resolves the path, checks it is a regular file and that the caller may execute it, **before** creating any task (a refusal leaves no child). Error codes (B4): any bad pointer (block/path/args) → **-1 EFAULT**; bad content (pathLen 0 or >260, argsLen >128, a handle ≠ -1) → **-5 EINVAL**; **-3** EACCES; **-4** ENOENT; **-6** ENOMEM. The kernel refuses (ENOMEM) rather than truncate if the next PID exceeds `int.MaxValue`. |
+| 6Bh | TASKLIST | RDI = out buffer, RSI = cap | count of tasks written | Writes up to `cap/20` task records (**20 bytes each: pid u64, state u32, name[8]**). Only tasks with the same uid as the caller (or all, if root) are listed. |
+| 6Ch | KILL | RDI = pid (u64) | 0 ok / -3 denied / -4 not found | Terminates a task. Console (pid 1) cannot be killed; only same-uid or root callers may kill. Unknown/out-of-range pid → -4. |
+| 6Dh | SETFG | RDI = pid (u64) | 0 ok / -3 denied / -4 not found | Marks a task as the foreground job. Only same-uid or root callers. |
+| 81h | WAIT | RSI = pid (u64) | child exit status, -1 unknown / already gone, **-7 EINTR** on Ctrl+C | blocks the caller; a Ctrl+C aborts the wait but leaves the child running |
+| 82h | GETABI | — | ABI version (= 9) | osbkt `Syscall.GetABI()`; check at startup |
 | 6Eh | GETCHAR | — | byte 0..255, -1 empty, -2 Ctrl+C | **Cooked** input: merges serial + PS/2 into one byte stream. Non-blocking: `-1` when no byte is ready. `-2` is a Ctrl+C marker delivered **in arrival order** (P0.2: the ring holds byte/`-2` entries, so a line typed after Ctrl+C is a new line, not merged with the aborted one). PS/2 extended keys synthesize the same ANSI sequences the serial path delivers (Up `ESC[A`, Down `ESC[B`, Right `ESC[C`, Left `ESC[D`, Home `ESC[H`, End `ESC[F`, Delete `ESC[3~`). The cooked ring is **flushed when a new foreground program is spawned** (S2), so stale input does not leak into the next program. |
 | 65h | LOGIN | RDI=name, RSI=nameLen, RDX=pass, RCX=passLen (byte strings) | 0 ok, -1 EFAULT, -3 EACCES | Kernel-owned session (1c). Verifies against PASSWD; unknown user and wrong password are the same **-3**. Only the **session leader** may LOGIN. An empty name or a name ≥ NameCap is rejected **-3** (never truncated). A LOGIN while a session is active first tears that session down (LOGOUT), then authenticates. On success sets session uid/gid/user and cwd to the user's home. Password is never returned by any syscall. |
 | 66h | LOGOUT | — | 0 ok, -3 EACCES | Only the **session leader**. Kills every task in the session except the leader and kernel tasks (session 0), clears the session user. The shell then prints a fresh `login:`. |
