@@ -35,6 +35,13 @@ namespace OsbKT
         private const int ChownNum       = 0x74; // CHOWN(path,len,uid) -> int
         private const int UserOpNum      = 0x75; // USEROP(sub,...) -> int
 
+        // Terminal API (7Ah-7Fh, K2)
+        private const int ConsInfoNum    = 0x7A; // CONS_INFO: out u16[2] (cols, rows) at RDI
+        private const int ConsCursorNum  = 0x7B; // CONS_CURSOR: AL=0 get,1 set,2 hide,3 show
+        private const int ConsWriteAtNum = 0x7C; // CONS_WRITE_AT: RDI=row,RSI=col,RDX=buf,RCX=len
+        private const int ConsKeyNum     = 0x7E; // CONS_KEY: AL=0 GETKEY,1 READKEY,2 KEYAVAILABLE
+        private const int ConsFrameNum   = 0x7F; // CONS_FRAME: AL=0 BEGIN,1 END,2 FLUSH
+
         // Register-based gate (osbkt/crt0.S): RAX = AH<<8 | AL, then
         // RDI, RSI, RDX, RCX arguments; result in RAX.
         [System.Runtime.InteropServices.DllImport("osbnative")]
@@ -605,6 +612,56 @@ namespace OsbKT
             Invoke(DateTimeNum, arg1: (ulong)buf);
             y = buf[0]; mo = buf[1]; d = buf[2]; h = buf[3]; mi = buf[4]; s = buf[5];
         }
+
+        // ----- terminal API (7Ah-7Fh) -----
+
+        // CONS_INFO (7Ah): RDI = out u16[2] (cols, rows). Returns true on success.
+        public static bool ConsInfo(out ushort cols, out ushort rows)
+        {
+            var buf = stackalloc byte[4];
+            if (Invoke(ConsInfoNum, arg1: (ulong)buf) != 0) { cols = 0; rows = 0; return false; }
+            cols = (ushort)(buf[0] | (buf[1] << 8));
+            rows = (ushort)(buf[2] | (buf[3] << 8));
+            return true;
+        }
+
+        // CONS_CURSOR (7Bh): AL subfunction. row/col are 1-based.
+        public static bool ConsCursorSet(int row, int col)
+            => Invoke(ConsCursorNum, al: 1, arg1: (ulong)row, arg2: (ulong)col) == 0;
+        public static bool ConsCursorHide() => Invoke(ConsCursorNum, al: 2) == 0;
+        public static bool ConsCursorShow() => Invoke(ConsCursorNum, al: 3) == 0;
+        public static bool ConsCursorGet(out int row, out int col)
+        {
+            var buf = stackalloc byte[4];
+            if (Invoke(ConsCursorNum, al: 0, arg1: (ulong)buf) != 0) { row = 0; col = 0; return false; }
+            row = buf[0] | (buf[1] << 8);
+            col = buf[2] | (buf[3] << 8);
+            return true;
+        }
+
+        // CONS_WRITE_AT (7Ch): RDI=row(1-based), RSI=col(1-based), RDX=buf, RCX=len.
+        // Returns bytes written or negative error.
+        public static int ConsWriteAt(int row, int col, byte* buf, int len)
+            => (int)Invoke(ConsWriteAtNum, arg1: (ulong)row, arg2: (ulong)col, arg3: (ulong)buf, arg4: (ulong)len);
+
+        // CONS_KEY (7Eh): AL=0 blocking GETKEY, AL=1 non-block READKEY, AL=2 KEYAVAILABLE.
+        // GETKEY returns pointer to 12-byte key event in user window (keyCode,char,ctrl,alt,shift,reserved).
+        public static ulong ConsKeyGet()
+            => Invoke(ConsKeyNum, al: 0);
+        public static ulong ConsKeyRead()
+            => Invoke(ConsKeyNum, al: 1);
+        public static bool ConsKeyAvailable()
+            => Invoke(ConsKeyNum, al: 2) != 0;
+
+        // CONS_FRAME (7Fh): AL=0 BEGINFRAME, AL=1 ENDFRAME, AL=2 FLUSH.
+        public static void ConsBeginFrame() => Invoke(ConsFrameNum, al: 0);
+        public static void ConsEndFrame() => Invoke(ConsFrameNum, al: 1);
+        public static void ConsFlushFrame() => Invoke(ConsFrameNum, al: 2);
+
+        // MODS (57h): returns bit0 = Ctrl held.
+        public static bool ConsMods()
+            => Invoke(0x57) != 0;
+
 
         // ----- account management (73h-75h, slice 7) -----
 
